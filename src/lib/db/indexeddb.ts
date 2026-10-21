@@ -1,0 +1,302 @@
+import { openDB, deleteDB, type IDBPDatabase, type IDBPTransaction } from 'idb';
+import {
+  type WorkspaceRecord,
+  type DocumentRecord,
+  type DocumentChunkRecord,
+  type SubjectRecord,
+  type ConceptRecord,
+  type ConceptDependencyRecord,
+  type StudySessionRecord,
+  type StudyPathItemRecord,
+  type RecallQuestionRecord,
+  type RecallAttemptRecord,
+  type MasteryStateRecord,
+  type SpacedRepetitionStateRecord,
+  type ConversationMessageRecord,
+  type LearningEventRecord,
+} from '@/types/domain';
+import { SCHEMA_VERSION } from './schema';
+import { runMigrations, MIGRATIONS, type Migration } from './migrations';
+import { StorageError, normalizeStorageError } from './errors';
+
+export const DB_NAME = 'edumentor-local';
+
+/**
+ * Fully typed IndexedDB schema for EduMentor.
+ * Source of truth: TECH_STACK.md §5.2 and PRD §11.
+ */
+export interface EduMentorDBSchema {
+  workspace: {
+    key: string;
+    value: WorkspaceRecord;
+    indexes: {
+      'by-updated': string;
+    };
+  };
+  documents: {
+    key: string;
+    value: DocumentRecord;
+    indexes: {
+      'by-created': string;
+      'by-subject': string;
+    };
+  };
+  documentChunks: {
+    key: string;
+    value: DocumentChunkRecord;
+    indexes: {
+      'by-document': string;
+      'by-doc-index': [string, number];
+    };
+  };
+  subjects: {
+    key: string;
+    value: SubjectRecord;
+    indexes: {
+      'by-title': string;
+    };
+  };
+  concepts: {
+    key: string;
+    value: ConceptRecord;
+    indexes: {
+      'by-subject': string;
+      'by-status': string;
+    };
+  };
+  conceptDependencies: {
+    key: string;
+    value: ConceptDependencyRecord;
+    indexes: {
+      'by-prerequisite': string;
+      'by-dependent': string;
+      'by-prereq-dep': [string, string];
+    };
+  };
+  studySessions: {
+    key: string;
+    value: StudySessionRecord;
+    indexes: {
+      'by-updated': string;
+      'by-status': string;
+    };
+  };
+  studyPathItems: {
+    key: string;
+    value: StudyPathItemRecord;
+    indexes: {
+      'by-session': string;
+      'by-session-order': [string, number];
+    };
+  };
+  recallQuestions: {
+    key: string;
+    value: RecallQuestionRecord;
+    indexes: {
+      'by-concept': string;
+    };
+  };
+  recallAttempts: {
+    key: string;
+    value: RecallAttemptRecord;
+    indexes: {
+      'by-concept': string;
+      'by-session': string;
+      'by-created': string;
+    };
+  };
+  masteryStates: {
+    key: string;
+    value: MasteryStateRecord;
+    indexes: {
+      'by-concept': string;
+      'by-updated': string;
+    };
+  };
+  spacedRepetitionStates: {
+    key: string;
+    value: SpacedRepetitionStateRecord;
+    indexes: {
+      'by-next-due': string;
+      'by-concept': string;
+    };
+  };
+  conversationMessages: {
+    key: string;
+    value: ConversationMessageRecord;
+    indexes: {
+      'by-session': string;
+      'by-created': string;
+    };
+  };
+  learningEvents: {
+    key: string;
+    value: LearningEventRecord;
+    indexes: {
+      'by-event-type': string;
+      'by-created': string;
+    };
+  };
+}
+
+export type StoreName =
+  | 'workspace'
+  | 'documents'
+  | 'documentChunks'
+  | 'subjects'
+  | 'concepts'
+  | 'conceptDependencies'
+  | 'studySessions'
+  | 'studyPathItems'
+  | 'recallQuestions'
+  | 'recallAttempts'
+  | 'masteryStates'
+  | 'spacedRepetitionStates'
+  | 'conversationMessages'
+  | 'learningEvents';
+
+const _openDatabases = new Map<string, IDBPDatabase<EduMentorDBSchema>>();
+
+/**
+ * Open the EduMentor IndexedDB database with versioned migrations and connection listeners.
+ */
+export async function openDatabase(
+  dbName = DB_NAME,
+  version = SCHEMA_VERSION,
+  customMigrations: Migration[] = MIGRATIONS,
+): Promise<IDBPDatabase<EduMentorDBSchema>> {
+  const existing = _openDatabases.get(dbName);
+  if (existing) {
+    if (existing.version === version) {
+      return existing;
+    }
+    // Version mismatch: close existing connection first so upgrade can proceed
+    existing.close();
+    _openDatabases.delete(dbName);
+  }
+
+  let migrationError: StorageError | null = null;
+
+  try {
+    const db = await openDB<EduMentorDBSchema>(dbName, version, {
+      upgrade(db, oldVersion, newVersion, transaction) {
+        // Prevent unhandled rejection on tx.done when tx.abort() is called during migration failure
+        transaction.done.catch(() => {});
+        try {
+          runMigrations(
+            db as unknown as IDBPDatabase<unknown>,
+            oldVersion,
+            newVersion ?? version,
+            transaction as unknown as IDBPTransaction<unknown, string[], 'versionchange'>,
+            customMigrations,
+          );
+        } catch (err) {
+          migrationError =
+            err instanceof StorageError
+              ? err
+              : new StorageError(
+                  `Database migration failed: ${err instanceof Error ? err.message : String(err)}. Your data has been preserved. Please export a backup from settings.`,
+                  'MIGRATION_FAILED',
+                  err,
+                );
+          try {
+            transaction.abort();
+          } catch {
+            // ignore
+          }
+        }
+      },
+      blocked() {
+        console.warn('EduMentor IndexedDB upgrade blocked by older connection');
+      },
+      blocking() {
+        console.warn('EduMentor IndexedDB connection is blocking an upgrade, closing');
+        closeDatabase(dbName);
+      },
+      terminated() {
+        console.warn('EduMentor IndexedDB connection abruptly terminated');
+        _openDatabases.delete(dbName);
+      },
+    });
+
+    _openDatabases.set(dbName, db);
+    return db;
+  } catch (err) {
+    if (migrationError) {
+      throw migrationError;
+    }
+    throw normalizeStorageError(err, 'Failed to open IndexedDB database');
+  }
+}
+
+/** Close active connection(s) */
+export function closeDatabase(dbName?: string): void {
+  if (dbName) {
+    const db = _openDatabases.get(dbName);
+    if (db) {
+      db.close();
+      _openDatabases.delete(dbName);
+    }
+  } else {
+    for (const [, db] of _openDatabases) {
+      try {
+        db.close();
+      } catch {
+        // ignore
+      }
+    }
+    _openDatabases.clear();
+  }
+}
+
+/** Delete an IndexedDB database completely */
+export async function removeDatabase(dbName = DB_NAME): Promise<void> {
+  closeDatabase(dbName);
+  try {
+    await deleteDB(dbName);
+  } catch (err) {
+    throw normalizeStorageError(err, 'Failed to delete IndexedDB database');
+  }
+}
+
+/**
+ * Execute a multi-store transaction atomically across one or more stores.
+ * If fn throws or fails, the transaction is automatically aborted.
+ */
+export async function runTransaction<
+  T,
+  Mode extends 'readonly' | 'readwrite' = 'readwrite',
+>(
+  storeNames: StoreName[],
+  mode: Mode,
+  fn: (tx: IDBPTransaction<EduMentorDBSchema, StoreName[], Mode>) => Promise<T>,
+  dbName = DB_NAME,
+): Promise<T> {
+  const db = await openDatabase(dbName);
+  const tx = db.transaction(storeNames, mode);
+
+  try {
+    const result = await fn(tx);
+    await tx.done;
+    return result;
+  } catch (err) {
+    tx.done.catch(() => {});
+    try {
+      tx.abort();
+    } catch {
+      // ignore abort if already aborted or finished
+    }
+    throw normalizeStorageError(err, 'Storage transaction failed');
+  }
+}
+
+/**
+ * Wrap a single storage write operation with quota error normalization.
+ */
+export async function safeWrite<T>(op: () => Promise<T>): Promise<T> {
+  try {
+    return await op();
+  } catch (err) {
+    throw normalizeStorageError(err);
+  }
+}

@@ -1,0 +1,117 @@
+@import 'tailwindcss';
+
+/*
+ * EduMentor Design Tokens
+ * Source of truth: DESIGN_DOC.md §4.1
+ * Dark navy/violet theme with WCAG 2.2 AA contrast targets.
+ */
+
+@theme inline {
+  /* --- Colour tokens --- */
+  --color-background: var(--background);
+  --color-surface: var(--surface);
+  --color-surface-raised: var(--surface-raised);
+  --color-surface-hover: var(--surface-hover);
+  --color-border: var(--border-color);
+  --color-text-primary: var(--text-primary);
+  --color-text-secondary: var(--text-secondary);
+  --color-text-muted: var(--text-muted);
+  --color-primary: var(--primary);
+  --color-primary-hover: var(--primary-hover);
+  --color-accent-blue: var(--accent-blue);
+  --color-accent-cyan: var(--accent-cyan);
+  --color-success: var(--success);
+  --color-warning: var(--warning);
+  --color-danger: var(--danger);
+
+  /* --- Typography --- */
+  --font-sans: var(--font-inter);
+
+  /* --- Border radii (DESIGN_DOC §4.4) --- */
+  --radius-card: 14px;
+  --radius-button: 10px;
+  --radius-pill: 9999px;
+
+  /* --- Spacing (4px base scale from DESIGN_DOC §4.3) --- */
+  --spacing-1: 4px;
+  --spacing-2: 8px;
+  --spacing-3: 12px;
+  --spacing-4: 16px;
+  --spacing-5: 20px;
+  --spacing-6: 24px;
+  --spacing-8: 32px;
+  --spacing-10: 40px;
+  --spacing-12: 48px;
+  --spacing-16: 64px;
+  --spacing-18: 72px;
+  --spacing-24: 96px;
+  --spacing-28: 112px;
+}
+
+:root {
+  /* DESIGN_DOC §4.1 colour values */
+  --background: #07091b;
+  --surface: #0d1028;
+  --surface-raised: #131735;
+  --surface-hover: #1a2044;
+  --border-color: #2a3157;
+  --text-primary: #f4f5ff;
+  --text-secondary: #b5bad6;
+  --text-muted: #858cab;
+  --primary: #7c3aed;
+  --primary-hover: #8b5cf6;
+  --accent-blue: #60a5fa;
+  --accent-cyan: #67e8f9;
+  --success: #34d399;
+  --warning: #fbbf24;
+  --danger: #fb7185;
+
+  /* Focus ring */
+  --focus-ring: #8b5cf6;
+  --focus-ring-offset: #07091b;
+}
+
+/* --- Base styles --- */
+body {
+  background: var(--background);
+  color: var(--text-primary);
+  font-family: var(--font-inter, 'Inter', system-ui, -apple-system, sans-serif);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+/* --- Focus ring (visible, accessible) --- */
+*:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 2px;
+}
+
+/* --- Reduced motion (DESIGN_DOC §7, PRD §9) --- */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+
+/* --- Skip link --- */
+.skip-link {
+  position: absolute;
+  top: -100%;
+  left: 16px;
+  z-index: 100;
+  padding: 8px 16px;
+  background: var(--primary);
+  color: var(--text-primary);
+  border-radius: var(--radius-button);
+  font-weight: 600;
+  text-decoration: none;
+}
+
+.skip-link:focus {
+  top: 16px;
+}

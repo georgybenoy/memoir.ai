@@ -1,0 +1,158 @@
+'use client';
+
+import * as React from 'react';
+import { WorkspaceHeader } from './header';
+import { WorkspaceSidebar } from './sidebar';
+import { WorkspaceAssistant } from './assistant';
+import { ToastViewport } from '@/components/ui/toast';
+import { ErrorBoundary } from '@/components/ui/error-boundary';
+import { useWorkspaceStore } from '@/lib/state/workspace-store';
+import { useSaveStatusStore } from '@/lib/state/save-status-store';
+import { bootstrapStorage } from '@/lib/db/bootstrap';
+import { X } from 'lucide-react';
+import { Button } from '@/components/ui/button';
+
+export interface WorkspaceLayoutProps {
+  children: React.ReactNode;
+}
+
+export const WorkspaceLayout: React.FC<WorkspaceLayoutProps> = ({ children }) => {
+  const [mobileNavOpen, setMobileNavOpen] = React.useState(false);
+  const { rightPanelOpen, setIsOnline } = useWorkspaceStore();
+
+  // Network listener
+  React.useEffect(() => {
+    const handleOnline = () => setIsOnline(true);
+    const handleOffline = () => setIsOnline(false);
+
+    window.addEventListener('online', handleOnline);
+    window.addEventListener('offline', handleOffline);
+
+    return () => {
+      window.removeEventListener('online', handleOnline);
+      window.removeEventListener('offline', handleOffline);
+    };
+  }, [setIsOnline]);
+
+  // On mobile screens, ensure assistant panel starts closed so canvas and hamburger are interactive
+  React.useEffect(() => {
+    if (typeof window !== 'undefined' && window.innerWidth < 768) {
+      useWorkspaceStore.getState().setRightPanelOpen(false);
+    }
+  }, []);
+
+  // Bootstrap IndexedDB storage on mount
+  React.useEffect(() => {
+    void bootstrapStorage();
+  }, []);
+
+  const { localDataNoticeDismissed, dismissLocalDataNotice, persistenceMode } = useSaveStatusStore();
+  const setActiveView = useWorkspaceStore((state) => state.setActiveView);
+
+  return (
+    <div className="flex min-h-screen flex-col bg-[var(--background)] text-[var(--text-primary)]">
+      {/* Accessible skip link */}
+      <a href="#main-content" className="skip-link">
+        Skip to main content
+      </a>
+
+      {/* Top Bar */}
+      <WorkspaceHeader onMobileNavToggle={() => setMobileNavOpen(true)} />
+
+      {/* Dismissible-but-reachable local data notice (PRD §1.3, FR-01, DESIGN_DOC §11) */}
+      {!localDataNoticeDismissed && (
+        <aside
+          aria-label="Local storage information"
+          className="flex items-center justify-between gap-3 border-b border-[var(--border-color)] bg-[var(--surface-raised)]/90 px-4 py-2 text-xs text-[var(--text-secondary)] sm:px-6"
+        >
+          <div className="flex flex-wrap items-center gap-x-2 gap-y-1 min-w-0">
+            <span className="font-semibold text-[var(--accent-blue)]">
+              {persistenceMode === 'memory' ? 'In-memory session:' : 'Browser-local data:'}
+            </span>
+            <span>
+              {persistenceMode === 'memory'
+                ? 'IndexedDB is blocked. Your progress will not persist across browser restarts.'
+                : 'Your learning records stay on this device and are not automatically synced.'}
+            </span>
+            <button
+              type="button"
+              onClick={() => setActiveView('settings')}
+              className="font-medium text-[var(--accent-blue)] hover:underline cursor-pointer"
+            >
+              Data settings
+            </button>
+          </div>
+          <button
+            type="button"
+            onClick={dismissLocalDataNotice}
+            className="flex h-6 w-6 shrink-0 items-center justify-center rounded text-[var(--text-muted)] hover:text-[var(--text-primary)] focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-[var(--focus-ring)] cursor-pointer"
+            aria-label="Dismiss local data notice"
+          >
+            <X className="h-3.5 w-3.5" aria-hidden="true" />
+          </button>
+        </aside>
+      )}
+
+      {/* Main Workspace Body */}
+      <div className="flex flex-1 overflow-hidden relative">
+        {/* Desktop / Tablet Sidebar (hidden on mobile) */}
+        <WorkspaceSidebar className="hidden md:flex shrink-0" />
+
+        {/* Mobile Navigation Drawer */}
+        {mobileNavOpen && (
+          <div className="fixed inset-0 z-50 flex md:hidden">
+            {/* Backdrop */}
+            <div
+              className="fixed inset-0 bg-black/70 backdrop-blur-xs"
+              onClick={() => setMobileNavOpen(false)}
+              aria-hidden="true"
+            />
+            {/* Drawer content */}
+            <div className="relative z-50 flex w-72 flex-col bg-[var(--surface)] shadow-2xl">
+              <div className="flex h-14 items-center justify-between border-b border-[var(--border-color)] px-4">
+                <span className="font-bold text-[var(--text-primary)]">Navigation</span>
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  onClick={() => setMobileNavOpen(false)}
+                  aria-label="Close navigation"
+                >
+                  <X className="h-4 w-4" aria-hidden="true" />
+                </Button>
+              </div>
+              <WorkspaceSidebar
+                isMobileDrawer
+                onMobileItemClick={() => setMobileNavOpen(false)}
+                className="w-full flex-1 border-r-0"
+              />
+            </div>
+          </div>
+        )}
+
+        {/* Center: Main Workspace Canvas */}
+        <main
+          id="main-content"
+          tabIndex={-1}
+          className="flex-1 overflow-y-auto focus-visible:outline-none"
+        >
+          <ErrorBoundary>
+            <div className="p-4 sm:p-6 lg:p-8">{children}</div>
+          </ErrorBoundary>
+        </main>
+
+        {/* Right: Assistant Panel (Desktop/Tablet) */}
+        <WorkspaceAssistant className="hidden md:flex shrink-0" />
+
+        {/* Mobile Assistant Sheet Overlay */}
+        {rightPanelOpen && (
+          <div className="fixed inset-0 z-50 flex flex-col bg-[var(--surface)] md:hidden">
+            <WorkspaceAssistant isMobileDrawer className="w-full h-full border-l-0" />
+          </div>
+        )}
+      </div>
+
+      {/* Accessible Toast Notifications */}
+      <ToastViewport />
+    </div>
+  );
+};
