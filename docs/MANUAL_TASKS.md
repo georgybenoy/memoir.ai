@@ -6,9 +6,10 @@ Running list of tasks that only a human can perform. Agents append items here an
 
 - [x] **Playwright browser installation** — Chromium browser installed and verified for E2E testing.
 - [x] **End-to-End Playwright test suite execution** — Full Playwright E2E suite executed against the production build (`next build && next start`), verifying accessibility, materials ingestion, study paths, full learning journey, backup/restore, review queues, and keyboard/mobile interactions.
-- [ ] **Obtain and configure `GEMINI_API_KEY`** — Create a Google AI Studio API key and add it to `.env.local` for local development and to Vercel Project Settings → Environment Variables for production.
+- [x] **Obtain and configure `GEMINI_API_KEY` locally** — Added to `.env.local` for local execution and development.
+- [x] **Push code to Git provider** — Pushed to `https://github.com/georgybenoy/memoir.ai.git` on `main` branch.
 - [ ] **Vercel Production Deployment**:
-  1. Push code to your Git provider (GitHub / GitLab / Bitbucket).
+  1. Go to the [Vercel Dashboard](https://vercel.com/new).
   2. In the Vercel dashboard, click **"Add New Project"** and import the repository.
   3. Framework Preset: **Next.js** (detected automatically).
   4. Root Directory: `./`
