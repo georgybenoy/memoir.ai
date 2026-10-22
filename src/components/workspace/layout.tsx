@@ -20,7 +20,7 @@ export interface WorkspaceLayoutProps {
 
 export const WorkspaceLayout: React.FC<WorkspaceLayoutProps> = ({ children }) => {
   const [mobileNavOpen, setMobileNavOpen] = React.useState(false);
-  const { rightPanelOpen, setIsOnline } = useWorkspaceStore();
+  const { setIsOnline } = useWorkspaceStore();
   const { totalDueCount, weakCount, bannerDismissed, dismissBanner, refreshDueCounts } =
     useReviewStore();
 
@@ -207,19 +207,12 @@ export const WorkspaceLayout: React.FC<WorkspaceLayoutProps> = ({ children }) =>
           className="flex-1 overflow-y-auto focus-visible:outline-none"
         >
           <ErrorBoundary>
-            <div className="p-4 sm:p-6 lg:p-8">{children}</div>
+            <div className="p-4 sm:p-6 lg:p-8 pb-24 sm:pb-28">{children}</div>
           </ErrorBoundary>
         </main>
 
-        {/* Right: Assistant Panel (Desktop/Tablet) */}
-        <WorkspaceAssistant className="hidden md:flex shrink-0" />
-
-        {/* Mobile Assistant Sheet Overlay */}
-        {rightPanelOpen && (
-          <div className="fixed inset-0 z-50 flex flex-col bg-[var(--surface)] md:hidden">
-            <WorkspaceAssistant isMobileDrawer className="w-full h-full border-l-0" />
-          </div>
-        )}
+        {/* Hovering AI Assistant Tab & Floating Panel */}
+        <WorkspaceAssistant />
       </div>
 
       {/* Accessible Toast Notifications */}

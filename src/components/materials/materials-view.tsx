@@ -552,28 +552,32 @@ export function MaterialsView() {
       {/* Selected Material Preview & Provenance Inspector */}
       {selectedDoc && (
         <section aria-labelledby="preview-heading" className="space-y-4">
-          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-            <div>
-              <div className="flex items-center gap-2">
-                <h2 id="preview-heading" className="text-xl font-bold text-[var(--text-primary)]">
+          <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 p-4 rounded-xl bg-[var(--surface-raised)]/60 border border-[var(--border-color)] min-w-0">
+            <div className="min-w-0 flex-1 space-y-1">
+              <div className="flex items-center gap-2 flex-wrap min-w-0">
+                <h2
+                  id="preview-heading"
+                  className="text-lg sm:text-xl font-bold text-[var(--text-primary)] truncate max-w-full"
+                  title={selectedDoc.filename}
+                >
                   {selectedDoc.filename}
                 </h2>
-                <span className="uppercase text-[10px] font-bold px-2 py-0.5 rounded-full bg-[var(--surface-raised)] border border-[var(--border-color)] text-[var(--accent-blue)]">
+                <span className="shrink-0 uppercase text-[10px] font-bold px-2 py-0.5 rounded-full bg-[var(--surface)] border border-[var(--border-color)] text-[var(--accent-blue)]">
                   {selectedDoc.fileType}
                 </span>
                 {extractedConcepts.length > 0 && (
-                  <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-[var(--success)]/15 border border-[var(--success)]/30 text-[var(--success)]">
+                  <span className="shrink-0 text-[10px] font-bold px-2 py-0.5 rounded-full bg-[var(--success)]/15 border border-[var(--success)]/30 text-[var(--success)]">
                     {extractedConcepts.length} Concepts Analyzed
                   </span>
                 )}
               </div>
-              <p className="text-xs text-[var(--text-secondary)] mt-0.5">
+              <p className="text-xs text-[var(--text-secondary)] truncate">
                 {formatBytes(selectedDoc.fileSize)} • {selectedDocChunks.length} study chunks • Added{' '}
                 {new Date(selectedDoc.createdAt).toLocaleDateString()}
               </p>
             </div>
 
-            <div className="flex items-center gap-2">
+            <div className="flex items-center gap-2 shrink-0 flex-wrap sm:flex-nowrap">
               {/* Active Analyze notes button */}
               <Button
                 variant="primary"
@@ -581,6 +585,7 @@ export function MaterialsView() {
                 disabled={isAnalyzing}
                 isLoading={isAnalyzing}
                 loadingText="Analyzing..."
+                className="shrink-0 whitespace-nowrap shadow-xs"
               >
                 <Sparkles className="h-4 w-4 mr-1.5" />
                 <span>{extractedConcepts.length > 0 ? 'Re-analyze notes' : 'Analyze notes'}</span>
@@ -590,7 +595,7 @@ export function MaterialsView() {
                 variant="secondary"
                 size="sm"
                 onClick={() => setDocToDelete(selectedDoc)}
-                className="text-[var(--danger)] hover:bg-[var(--danger)]/10"
+                className="shrink-0 text-[var(--danger)] hover:bg-[var(--danger)]/10"
               >
                 <Trash2 className="h-4 w-4" />
                 <span className="sr-only sm:not-sr-only sm:ml-1">Delete</span>
@@ -605,6 +610,7 @@ export function MaterialsView() {
                   setExtractedConcepts([]);
                 }}
                 aria-label="Close document preview"
+                className="shrink-0"
               >
                 <X className="h-4 w-4" />
               </Button>
@@ -968,13 +974,13 @@ export function MaterialsView() {
                       : 'border-[var(--border-color)] bg-[var(--surface)] hover:bg-[var(--surface-hover)]',
                   )}
                 >
-                  <div className="flex items-start gap-3 min-w-0">
+                  <div className="flex items-start gap-3 min-w-0 flex-1">
                     <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-[var(--primary)]/10 text-[var(--primary)] mt-0.5">
                       <FileText className="h-5 w-5" aria-hidden="true" />
                     </div>
-                    <div className="min-w-0">
-                      <div className="flex items-center gap-2">
-                        <h3 className="text-sm font-semibold text-[var(--text-primary)] truncate">
+                    <div className="min-w-0 flex-1">
+                      <div className="flex items-center gap-2 min-w-0 flex-wrap sm:flex-nowrap">
+                        <h3 className="text-sm font-semibold text-[var(--text-primary)] truncate max-w-full" title={doc.filename}>
                           {doc.filename}
                         </h3>
                         <span className="uppercase text-[10px] font-bold px-1.5 py-0.2 rounded bg-[var(--surface-raised)] border border-[var(--border-color)] text-[var(--accent-blue)]">
