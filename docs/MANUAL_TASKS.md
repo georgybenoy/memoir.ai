@@ -17,13 +17,13 @@ Running list of tasks that only a human can perform. Agents append items here an
   6. Output Directory: `.next`
   7. In **Environment Variables**, add:
      - `GEMINI_API_KEY`: `<Your-Google-AI-Studio-API-Key>` (marked Sensitive / Encrypted)
-     - `GEMINI_MODEL`: `gemini-2.5-flash`
+     - `GEMINI_MODEL`: `gemini-3.8-flash`
      - `LOG_LEVEL`: `info`
   8. Click **Deploy**.
 - [ ] **Post-Deployment Verification Checklist**:
   1. Open `https://<your-project>.vercel.app/api/health` — confirm response:
      ```json
-     { "status": "ok", "aiConfigured": true, "defaultModel": "gemini-2.5-flash" }
+     { "status": "ok", "aiConfigured": true, "defaultModel": "gemini-3.8-flash" }
      ```
   2. Open `https://<your-project>.vercel.app/` — verify marketing landing page renders with zero console errors and clean layout.
   3. Click "Start learning" — enter `/app` workspace without login or authentication barriers.

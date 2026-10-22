@@ -289,7 +289,8 @@ export async function withAiGuard<T extends { model?: string }>(
           `Model "${data.model}" is not on the allowed models list.`,
         );
       }
-      selectedModel = data.model;
+      // Seamlessly upgrade retired gemini-2.5-flash requests to gemini-3.8-flash
+      selectedModel = data.model === 'gemini-2.5-flash' ? 'gemini-3.8-flash' : data.model;
     }
 
     // 8. Execute actual route handler

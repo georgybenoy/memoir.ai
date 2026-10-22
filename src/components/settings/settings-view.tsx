@@ -578,11 +578,11 @@ export const SettingsView: React.FC = () => {
                 Selected Model
               </span>
               <p className="text-xs text-[var(--text-muted)]">
-                Validated against server allowlist. Server default: {aiHealth?.defaultModel || 'gemini-2.5-flash'}.
+                Validated against server allowlist. Server default: {aiHealth?.defaultModel || 'gemini-3.8-flash'}.
               </p>
             </div>
             <select
-              value={workspace?.preferences.model ?? aiHealth?.defaultModel ?? 'gemini-2.5-flash'}
+              value={workspace?.preferences.model ?? aiHealth?.defaultModel ?? 'gemini-3.8-flash'}
               onChange={(e) => handlePreferenceChange('model', e.target.value)}
               className="rounded-[10px] border border-[var(--border-color)] bg-[var(--surface)] px-3 py-1.5 text-xs text-[var(--text-primary)]"
               aria-label="Gemini model selection"

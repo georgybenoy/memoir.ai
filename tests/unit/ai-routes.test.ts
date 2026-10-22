@@ -43,9 +43,9 @@ describe('AI API Routes (health, extract-concepts, explain-concept)', () => {
       const body = await res.json();
       expect(body.status).toBe('ok');
       expect(body.aiConfigured).toBe(false);
-      expect(body.defaultModel).toBe('gemini-2.5-flash');
+      expect(body.defaultModel).toBe('gemini-3.8-flash');
       expect(Array.isArray(body.allowedModels)).toBe(true);
-      expect(body.allowedModels).toContain('gemini-2.5-flash');
+      expect(body.allowedModels).toContain('gemini-3.8-flash');
 
       // Verify no secrets in body
       const rawBody = JSON.stringify(body);
@@ -61,7 +61,7 @@ describe('AI API Routes (health, extract-concepts, explain-concept)', () => {
       const body = await res.json();
       expect(body.status).toBe('ok');
       expect(body.aiConfigured).toBe(true);
-      expect(body.defaultModel).toBe('gemini-2.5-flash');
+      expect(body.defaultModel).toBe('gemini-3.8-flash');
     });
   });
 

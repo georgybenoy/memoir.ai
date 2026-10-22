@@ -105,6 +105,10 @@ export class WorkspaceIdbRepository
   async getOrCreateDefault(): Promise<WorkspaceRecord> {
     const existing = await this.getWorkspace();
     if (existing) {
+      if (existing.preferences?.model === 'gemini-2.5-flash') {
+        existing.preferences.model = 'gemini-3.8-flash';
+        await this.put(existing);
+      }
       return existing;
     }
 
@@ -115,7 +119,7 @@ export class WorkspaceIdbRepository
       updatedAt: timestamp,
       schemaVersion: SCHEMA_VERSION,
       preferences: {
-        model: 'gemini-2.5-flash',
+        model: 'gemini-3.8-flash',
         difficulty: 'intermediate',
         reducedMotion: false,
       },

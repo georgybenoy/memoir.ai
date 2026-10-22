@@ -25,17 +25,17 @@ describe('Settings, Model Allowlist & Difficulty Preference', () => {
       expect(isModelAllowed('')).toBe(false);
     });
 
-    it('falls back to default model gemini-2.5-flash if env is absent or invalid', () => {
+    it('falls back to default model gemini-3.8-flash if env is absent or invalid', () => {
       const originalEnv = process.env.GEMINI_MODEL;
       try {
         delete process.env.GEMINI_MODEL;
-        expect(getDefaultModel()).toBe('gemini-2.5-flash');
+        expect(getDefaultModel()).toBe('gemini-3.8-flash');
 
         process.env.GEMINI_MODEL = 'gemini-1.5-pro';
         expect(getDefaultModel()).toBe('gemini-1.5-pro');
 
         process.env.GEMINI_MODEL = 'invalid-model-name';
-        expect(getDefaultModel()).toBe('gemini-2.5-flash');
+        expect(getDefaultModel()).toBe('gemini-3.8-flash');
       } finally {
         process.env.GEMINI_MODEL = originalEnv;
       }

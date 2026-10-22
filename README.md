@@ -89,7 +89,7 @@ cp .env.example .env.local
 Edit `.env.local` with your Gemini API key:
 ```bash
 GEMINI_API_KEY="AIzaSyYourActualKeyHere"
-GEMINI_MODEL="gemini-2.5-flash"
+GEMINI_MODEL="gemini-3.8-flash"
 LOG_LEVEL="info"
 ```
 
@@ -160,7 +160,7 @@ EduMentor is designed for effortless deployment to Vercel serverless infrastruct
    - Output Directory: `.next`
 3. **Configure Environment Variables**:
    - `GEMINI_API_KEY`: Set your Google Gemini API key as a production/preview secret.
-   - `GEMINI_MODEL`: `gemini-2.5-flash`
+   - `GEMINI_MODEL`: `gemini-3.8-flash`
    - `LOG_LEVEL`: `info`
 4. **Deploy**: Click Deploy.
 5. **Verify**: Check `https://your-deployment.vercel.app/api/health` to confirm gateway health.

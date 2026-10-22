@@ -168,8 +168,8 @@ describe('AI Client Library (src/lib/ai/client.ts)', () => {
           JSON.stringify({
             status: 'ok',
             aiConfigured: true,
-            defaultModel: 'gemini-2.5-flash',
-            allowedModels: ['gemini-2.5-flash'],
+            defaultModel: 'gemini-3.8-flash',
+            allowedModels: ['gemini-3.8-flash'],
           }),
           { status: 200 },
         ),

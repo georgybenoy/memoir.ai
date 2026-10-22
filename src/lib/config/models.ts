@@ -7,6 +7,8 @@
  */
 
 export const ALLOWED_MODELS = [
+  'gemini-3.8-flash',
+  'gemini-3.8-pro',
   'gemini-2.5-flash',
   'gemini-2.0-flash',
   'gemini-2.0-flash-lite',
@@ -18,14 +20,14 @@ export type AllowedModelId = (typeof ALLOWED_MODELS)[number];
 
 /**
  * Default Gemini model for study concept extraction and Socratic tutoring.
- * Configured via GEMINI_MODEL env var or defaults to 'gemini-2.5-flash'.
+ * Configured via GEMINI_MODEL env var or defaults to 'gemini-3.8-flash'.
  */
 export function getDefaultModel(): AllowedModelId {
   const envModel = process.env.GEMINI_MODEL;
   if (envModel && (ALLOWED_MODELS as readonly string[]).includes(envModel)) {
     return envModel as AllowedModelId;
   }
-  return 'gemini-2.5-flash';
+  return 'gemini-3.8-flash';
 }
 
 /**
@@ -46,6 +48,18 @@ export interface ModelInfo {
 }
 
 export const MODEL_REGISTRY: Record<AllowedModelId, ModelInfo> = {
+  'gemini-3.8-flash': {
+    id: 'gemini-3.8-flash',
+    displayName: 'Gemini 3.8 Flash (Recommended)',
+    maxOutputTokens: 8192,
+    recommendedFor: 'balanced',
+  },
+  'gemini-3.8-pro': {
+    id: 'gemini-3.8-pro',
+    displayName: 'Gemini 3.8 Pro',
+    maxOutputTokens: 8192,
+    recommendedFor: 'deep',
+  },
   'gemini-2.5-flash': {
     id: 'gemini-2.5-flash',
     displayName: 'Gemini 2.5 Flash',

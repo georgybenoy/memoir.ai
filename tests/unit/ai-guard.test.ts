@@ -136,7 +136,7 @@ describe('AI Guard & Security Controls (withAiGuard)', () => {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           message: 'hello tutor',
-          model: 'gemini-2.5-flash',
+          model: 'gemini-3.8-flash',
         }),
       });
 
@@ -147,7 +147,7 @@ describe('AI Guard & Security Controls (withAiGuard)', () => {
       });
 
       expect(res.status).toBe(200);
-      expect(receivedModel).toBe('gemini-2.5-flash');
+      expect(receivedModel).toBe('gemini-3.8-flash');
       const data = await res.json();
       expect(data.echoed).toBe('hello tutor');
     });

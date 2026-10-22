@@ -39,7 +39,7 @@ describe('IdbRepositories CRUD & Index Queries', () => {
     const ws = await repos.workspace.getOrCreateDefault();
     expect(ws).toBeDefined();
     expect(ws.id).toBe('default-workspace');
-    expect(ws.preferences.model).toBe('gemini-2.5-flash');
+    expect(ws.preferences.model).toBe('gemini-3.8-flash');
     expect(ws.preferences.difficulty).toBe('intermediate');
 
     const updated = await repos.workspace.updatePreferences({ difficulty: 'advanced' });

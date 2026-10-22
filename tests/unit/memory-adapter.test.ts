@@ -54,7 +54,7 @@ describe('In-Memory Repository Adapter & Probe Parity', () => {
   it('implements workspace CRUD and preference updates with parity', async () => {
     const defaultWs = await repos.workspace.getOrCreateDefault();
     expect(defaultWs).toBeDefined();
-    expect(defaultWs.preferences.model).toBe('gemini-2.5-flash');
+    expect(defaultWs.preferences.model).toBe('gemini-3.8-flash');
 
     const updated = await repos.workspace.updatePreferences({ difficulty: 'advanced' });
     expect(updated.preferences.difficulty).toBe('advanced');
