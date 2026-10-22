@@ -16,7 +16,6 @@ import {
   type LearningEventRecord,
   type ConceptStatus,
 } from '@/types/domain';
-import { generateId } from '@/lib/utils/id';
 import { nowISO } from '@/lib/utils/clock';
 import { openDatabase, DB_NAME, type StoreName, type EduMentorDBSchema, safeWrite } from '../indexeddb';
 import { SCHEMA_VERSION } from '../schema';
@@ -110,9 +109,8 @@ export class WorkspaceIdbRepository
     }
 
     const timestamp = nowISO();
-    // Workspace ID is a random client identifier, not a security boundary.
     const defaultWorkspace: WorkspaceRecord = {
-      id: generateId(),
+      id: 'default-workspace',
       createdAt: timestamp,
       updatedAt: timestamp,
       schemaVersion: SCHEMA_VERSION,

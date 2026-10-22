@@ -7,6 +7,7 @@ import {
   Network,
   Brain,
   Clock,
+  BarChart3,
   Settings,
   ChevronLeft,
   ChevronRight,
@@ -23,11 +24,12 @@ interface NavItem {
 }
 
 const navItems: NavItem[] = [
-  { id: 'workspace', label: 'Workspace', icon: LayoutDashboard },
+  { id: 'workspace', label: 'Home', icon: LayoutDashboard },
   { id: 'materials', label: 'Study Materials', icon: BookOpen },
   { id: 'concepts', label: 'Concept Map', icon: Network },
   { id: 'recall', label: 'Recall Practice', icon: Brain },
   { id: 'review', label: 'Spaced Review', icon: Clock },
+  { id: 'progress', label: 'Progress & History', icon: BarChart3 },
   { id: 'settings', label: 'Data & Settings', icon: Settings },
 ];
 
@@ -37,17 +39,37 @@ export interface WorkspaceSidebarProps {
   onMobileItemClick?: () => void;
 }
 
+import { useRouter, usePathname } from 'next/navigation';
+import { useReviewStore } from '@/lib/state/review-store';
+
+const routeMap: Record<WorkspaceView, string> = {
+  workspace: '/app',
+  materials: '/app/materials',
+  concepts: '/app/path',
+  recall: '/app/tutor',
+  review: '/app/review',
+  progress: '/app/progress',
+  settings: '/app/settings',
+};
+
 export const WorkspaceSidebar: React.FC<WorkspaceSidebarProps> = ({
   className,
   isMobileDrawer = false,
   onMobileItemClick,
 }) => {
+  const router = useRouter();
+  const pathname = usePathname();
   const { sidebarCollapsed, toggleSidebar, activeView, setActiveView } = useWorkspaceStore();
+  const totalDueCount = useReviewStore((state) => state.totalDueCount);
   const isCollapsed = !isMobileDrawer && sidebarCollapsed;
 
   const handleSelect = (view: WorkspaceView) => {
     setActiveView(view);
     onMobileItemClick?.();
+    const targetRoute = routeMap[view];
+    if (targetRoute && pathname !== targetRoute) {
+      router.push(targetRoute);
+    }
   };
 
   return (
@@ -63,7 +85,10 @@ export const WorkspaceSidebar: React.FC<WorkspaceSidebarProps> = ({
       <nav aria-label="Workspace navigation" className="flex-1 space-y-1 p-2 sm:p-3">
         {navItems.map((item) => {
           const Icon = item.icon;
-          const isActive = activeView === item.id;
+          const targetRoute = routeMap[item.id];
+          const isActive = pathname === targetRoute || activeView === item.id;
+          const isReviewItem = item.id === 'review';
+          const hasDue = isReviewItem && totalDueCount > 0;
 
           return (
             <button
@@ -71,8 +96,14 @@ export const WorkspaceSidebar: React.FC<WorkspaceSidebarProps> = ({
               type="button"
               onClick={() => handleSelect(item.id)}
               aria-current={isActive ? 'page' : undefined}
-              title={isCollapsed ? item.label : undefined}
-              aria-label={item.label}
+              title={
+                isCollapsed
+                  ? hasDue
+                    ? `${item.label} (${totalDueCount} due)`
+                    : item.label
+                  : undefined
+              }
+              aria-label={hasDue ? `${item.label}, ${totalDueCount} reviews due` : item.label}
               className={cn(
                 'group relative flex w-full items-center gap-3 rounded-[10px] px-3 py-2.5 text-sm font-medium transition-colors cursor-pointer',
                 isActive
@@ -85,11 +116,22 @@ export const WorkspaceSidebar: React.FC<WorkspaceSidebarProps> = ({
                   'h-5 w-5 shrink-0 transition-colors',
                   isActive
                     ? 'text-[var(--primary-hover)]'
-                    : 'text-[var(--text-muted)] group-hover:text-[var(--text-primary)]',
+                    : hasDue
+                      ? 'text-[var(--danger)]'
+                      : 'text-[var(--text-muted)] group-hover:text-[var(--text-primary)]',
                 )}
                 aria-hidden="true"
               />
-              {!isCollapsed && <span className="truncate">{item.label}</span>}
+              {!isCollapsed && (
+                <>
+                  <span className="truncate">{item.label}</span>
+                  {hasDue && (
+                    <span className="ml-auto px-2 py-0.5 rounded-full text-[11px] font-semibold bg-[var(--danger)]/15 text-[var(--danger)] border border-[var(--danger)]/30">
+                      {totalDueCount} due
+                    </span>
+                  )}
+                </>
+              )}
             </button>
           );
         })}

@@ -9,8 +9,10 @@ import { ErrorBoundary } from '@/components/ui/error-boundary';
 import { useWorkspaceStore } from '@/lib/state/workspace-store';
 import { useSaveStatusStore } from '@/lib/state/save-status-store';
 import { bootstrapStorage } from '@/lib/db/bootstrap';
-import { X } from 'lucide-react';
+import { X, Clock, AlertTriangle } from 'lucide-react';
+import Link from 'next/link';
 import { Button } from '@/components/ui/button';
+import { useReviewStore } from '@/lib/state/review-store';
 
 export interface WorkspaceLayoutProps {
   children: React.ReactNode;
@@ -19,6 +21,8 @@ export interface WorkspaceLayoutProps {
 export const WorkspaceLayout: React.FC<WorkspaceLayoutProps> = ({ children }) => {
   const [mobileNavOpen, setMobileNavOpen] = React.useState(false);
   const { rightPanelOpen, setIsOnline } = useWorkspaceStore();
+  const { totalDueCount, weakCount, bannerDismissed, dismissBanner, refreshDueCounts } =
+    useReviewStore();
 
   // Network listener
   React.useEffect(() => {
@@ -41,12 +45,21 @@ export const WorkspaceLayout: React.FC<WorkspaceLayoutProps> = ({ children }) =>
     }
   }, []);
 
-  // Bootstrap IndexedDB storage on mount
+  // Bootstrap IndexedDB storage and refresh review counts on mount
   React.useEffect(() => {
-    void bootstrapStorage();
-  }, []);
+    void (async () => {
+      await bootstrapStorage();
+      await refreshDueCounts();
+    })();
+  }, [refreshDueCounts]);
 
-  const { localDataNoticeDismissed, dismissLocalDataNotice, persistenceMode } = useSaveStatusStore();
+  const {
+    localDataNoticeDismissed,
+    dismissLocalDataNotice,
+    persistenceMode,
+    status: saveStatus,
+    errorMessage: saveErrorMessage,
+  } = useSaveStatusStore();
   const setActiveView = useWorkspaceStore((state) => state.setActiveView);
 
   return (
@@ -58,6 +71,64 @@ export const WorkspaceLayout: React.FC<WorkspaceLayoutProps> = ({ children }) =>
 
       {/* Top Bar */}
       <WorkspaceHeader onMobileNavToggle={() => setMobileNavOpen(true)} />
+
+      {/* Storage Quota / Save Failure Alert Banner (PRD §1.3, PRD §8, Task 1) */}
+      {saveStatus === 'error' && (
+        <aside
+          role="alert"
+          aria-live="assertive"
+          className="flex items-center justify-between gap-3 border-b border-[var(--danger)]/60 bg-[var(--danger)]/15 px-4 py-2.5 text-xs text-[var(--text-primary)] sm:px-6"
+        >
+          <div className="flex flex-wrap items-center gap-x-2 gap-y-1 min-w-0">
+            <span className="inline-flex items-center gap-1.5 font-bold text-[var(--danger)]">
+              <AlertTriangle className="h-4 w-4 shrink-0" aria-hidden="true" />
+              Storage Limit / Save Failed:
+            </span>
+            <span>
+              {saveErrorMessage ||
+                'Storage quota reached. Your recent progress was NOT saved to local storage.'}
+            </span>
+            <Link
+              href="/app/settings"
+              className="font-medium text-[var(--accent-blue)] underline hover:no-underline cursor-pointer"
+            >
+              Export backup & cleanup &rarr;
+            </Link>
+          </div>
+        </aside>
+      )}
+
+      {/* In-app due reviews banner (PRD FR-11, FR-16, Phase 8) */}
+      {totalDueCount > 0 && !bannerDismissed && (
+        <aside
+          aria-label="Spaced review due reminder"
+          className="flex items-center justify-between gap-3 border-b border-[var(--accent-orange)]/40 bg-[var(--accent-orange)]/10 px-4 py-2 text-xs text-[var(--text-primary)] sm:px-6"
+        >
+          <div className="flex flex-wrap items-center gap-x-2 gap-y-1 min-w-0">
+            <span className="inline-flex items-center gap-1.5 font-semibold text-[var(--accent-orange)]">
+              <Clock className="h-3.5 w-3.5" aria-hidden="true" />
+              Due for Spaced Review ({totalDueCount})
+            </span>
+            <span>
+              You have {totalDueCount} concept{totalDueCount > 1 ? 's' : ''} scheduled for review today{weakCount > 0 ? ` (including ${weakCount} marked weak)` : ''}.
+            </span>
+            <Link
+              href="/app/review"
+              className="font-medium text-[var(--accent-blue)] hover:underline inline-flex items-center gap-1 cursor-pointer"
+            >
+              Review now &rarr;
+            </Link>
+          </div>
+          <button
+            type="button"
+            onClick={dismissBanner}
+            className="flex h-6 w-6 shrink-0 items-center justify-center rounded text-[var(--text-muted)] hover:text-[var(--text-primary)] focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-[var(--focus-ring)] cursor-pointer"
+            aria-label="Dismiss review reminder"
+          >
+            <X className="h-3.5 w-3.5" aria-hidden="true" />
+          </button>
+        </aside>
+      )}
 
       {/* Dismissible-but-reachable local data notice (PRD §1.3, FR-01, DESIGN_DOC §11) */}
       {!localDataNoticeDismissed && (

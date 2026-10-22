@@ -1,10 +1,11 @@
 'use client';
 
 import * as React from 'react';
-import { Sparkles, X, MessageSquare, Bot } from 'lucide-react';
+import { Sparkles, X, MessageSquare } from 'lucide-react';
 import { useWorkspaceStore } from '@/lib/state/workspace-store';
 import { Button } from '@/components/ui/button';
 import { EmptyState } from '@/components/ui/empty-state';
+import { TeacherAvatar } from '@/components/avatar';
 import { cn } from '@/lib/utils/cn';
 
 export interface WorkspaceAssistantProps {
@@ -33,8 +34,8 @@ export const WorkspaceAssistant: React.FC<WorkspaceAssistantProps> = ({
     >
       {/* Assistant Header */}
       <div className="flex h-14 items-center justify-between border-b border-[var(--border-color)] px-4">
-        <div className="flex items-center gap-2">
-          <Bot className="h-4 w-4 text-[var(--accent-blue)]" aria-hidden="true" />
+        <div className="flex items-center gap-2.5">
+          <TeacherAvatar expression="Greeting" size="sm" />
           <h2 className="text-sm font-semibold text-[var(--text-primary)]">Tutor Assistant</h2>
         </div>
         <Button

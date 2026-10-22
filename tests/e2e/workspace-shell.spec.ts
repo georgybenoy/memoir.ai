@@ -3,17 +3,17 @@ import { test, expect } from '@playwright/test';
 test.describe('Workspace Shell Layout and Responsiveness', () => {
   test('renders full three-panel layout on desktop viewport', async ({ page }) => {
     await page.setViewportSize({ width: 1280, height: 800 });
-    await page.goto('/');
+    await page.goto('/app');
 
     // Header elements
-    await expect(page.getByText('EduMentor')).toBeVisible();
+    await expect(page.getByText('EduMentor', { exact: true })).toBeVisible();
     await expect(page.getByText('Saved on this device')).toBeVisible();
     await expect(page.getByText('Online')).toBeVisible();
 
     // Navigation Sidebar
     const nav = page.getByRole('navigation', { name: /workspace navigation/i });
     await expect(nav).toBeVisible();
-    await expect(nav.getByRole('button', { name: 'Workspace' })).toBeVisible();
+    await expect(nav.getByRole('button', { name: 'Home' })).toBeVisible();
     await expect(nav.getByRole('button', { name: 'Study Materials' })).toBeVisible();
     await expect(nav.getByRole('button', { name: 'Concept Map' })).toBeVisible();
     await expect(nav.getByRole('button', { name: 'Recall Practice' })).toBeVisible();
@@ -32,7 +32,7 @@ test.describe('Workspace Shell Layout and Responsiveness', () => {
 
   test('toggles sidebar collapse on desktop', async ({ page }) => {
     await page.setViewportSize({ width: 1280, height: 800 });
-    await page.goto('/');
+    await page.goto('/app');
 
     const collapseBtn = page.getByRole('button', { name: /collapse sidebar/i });
     await expect(collapseBtn).toBeVisible();
@@ -48,7 +48,7 @@ test.describe('Workspace Shell Layout and Responsiveness', () => {
 
   test('toggles assistant panel visibility', async ({ page }) => {
     await page.setViewportSize({ width: 1280, height: 800 });
-    await page.goto('/');
+    await page.goto('/app');
 
     const assistant = page.getByRole('complementary', { name: /ai tutor assistant/i });
     await expect(assistant).toBeVisible();
@@ -66,7 +66,7 @@ test.describe('Workspace Shell Layout and Responsiveness', () => {
 
   test('adapts cleanly to mobile viewport with drawer navigation', async ({ page }) => {
     await page.setViewportSize({ width: 375, height: 667 });
-    await page.goto('/');
+    await page.goto('/app');
 
     // Desktop sidebar should be hidden
     const desktopNav = page.getByLabel('Navigation sidebar');
@@ -87,7 +87,7 @@ test.describe('Workspace Shell Layout and Responsiveness', () => {
   });
 
   test('supports keyboard skip link navigation', async ({ page }) => {
-    await page.goto('/');
+    await page.goto('/app');
 
     // Press Tab once to focus skip link
     await page.keyboard.press('Tab');

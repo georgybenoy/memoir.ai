@@ -11,8 +11,9 @@ import {
   createBackupEnvelope,
   validateBackupFile,
   executeImport,
+  restoreRollbackData,
 } from '@/lib/db/backup';
-import { MAX_BACKUP_SIZE_BYTES } from '@/lib/db/schema';
+import { MAX_BACKUP_SIZE_BYTES, MAX_RECORDS_PER_STORE } from '@/lib/db/schema';
 import {
   type DocumentRecord,
   type DocumentChunkRecord,
@@ -438,5 +439,249 @@ describe('Backup Export, Validation, and Import Foundation', () => {
     const res = validateBackupFile(jsonStr, jsonStr.length);
     expect(res.valid).toBe(false);
     expect(res.errors[0]).toContain('references non-existent dependentConceptId');
+  });
+
+  it('rejects backups exceeding MAX_RECORDS_PER_STORE (10,000 records)', async () => {
+    await seedFullDataset();
+    const envelope = await createBackupEnvelope(repos);
+
+    // Inflate concepts store beyond 10,000 records
+    const baseConcept = envelope.concepts[0];
+    const dummyConcepts: ConceptRecord[] = [];
+    for (let i = 0; i < MAX_RECORDS_PER_STORE + 5; i++) {
+      dummyConcepts.push({
+        ...baseConcept,
+        id: `concept-overflow-${i}`,
+      });
+    }
+    envelope.concepts = dummyConcepts;
+
+    const jsonStr = JSON.stringify(envelope);
+    const res = validateBackupFile(jsonStr, jsonStr.length);
+    expect(res.valid).toBe(false);
+    expect(res.errors[0]).toContain('exceeds maximum limit of 10000 records');
+  });
+
+  describe('Hardened Conflict Policies & Rollback Safety', () => {
+    it('prefer_imported policy updates existing local records on ID collision', async () => {
+      await seedFullDataset();
+      const envelope = await createBackupEnvelope(repos);
+
+      // Mutate title of concept in incoming backup
+      envelope.concepts[0].title = 'Updated Memory Paging Title';
+
+      const result = await executeImport(envelope, 'prefer_imported', repos);
+      expect(result.updatedCount).toBeGreaterThanOrEqual(1);
+
+      const loaded = await repos.concepts.get(envelope.concepts[0].id);
+      expect(loaded?.title).toBe('Updated Memory Paging Title');
+    });
+
+    it('import_as_copy policy generates new IDs for collisions and remaps relational references', async () => {
+      await seedFullDataset();
+      const envelope = await createBackupEnvelope(repos);
+
+      const origDocId = envelope.documents[0].id;
+      const origConceptId = envelope.concepts[0].id;
+
+      const result = await executeImport(envelope, 'import_as_copy', repos);
+      expect(result.copiedCount).toBeGreaterThanOrEqual(1);
+
+      // Verify that new documents exist alongside original
+      const allDocs = await repos.documents.list();
+      expect(allDocs.length).toBe(2);
+
+      const copiedDoc = allDocs.find((d) => d.id !== origDocId);
+      expect(copiedDoc).toBeDefined();
+
+      // Verify chunks were copied and their documentId was remapped to the copied document
+      const allChunks = await repos.chunks.list();
+      expect(allChunks.length).toBe(2);
+      const copiedChunk = allChunks.find((c) => c.documentId === copiedDoc!.id);
+      expect(copiedChunk).toBeDefined();
+
+      // Verify concepts were copied and remapped
+      const allConcepts = await repos.concepts.list();
+      expect(allConcepts.length).toBe(4); // 2 original + 2 copies
+      const copiedConcept = allConcepts.find((c) => c.id !== origConceptId);
+      expect(copiedConcept).toBeDefined();
+      expect(copiedConcept?.sourceChunkIds).toContain(copiedChunk!.id);
+    });
+
+    it('replace_all generates a safety rollback snapshot and restoreRollbackData restores previous state', async () => {
+      await seedFullDataset();
+      const origConcepts = await repos.concepts.list();
+      const origTitle = origConcepts[0].title;
+
+      // Create an empty incoming backup
+      const emptyEnvelope = await createBackupEnvelope(repos);
+      emptyEnvelope.documents = [];
+      emptyEnvelope.documentChunks = [];
+      emptyEnvelope.concepts = [];
+      emptyEnvelope.recallAttempts = [];
+
+      // Replace all data
+      const replaceResult = await executeImport(emptyEnvelope, 'replace_all', repos);
+      expect(replaceResult.rollbackExport).toBeDefined();
+
+      // Confirm local database was cleared
+      const afterReplaceConcepts = await repos.concepts.list();
+      expect(afterReplaceConcepts.length).toBe(0);
+
+      // Restore safety rollback snapshot
+      await restoreRollbackData(replaceResult.rollbackExport!, repos);
+
+      // Confirm previous state was completely restored
+      const restoredConcepts = await repos.concepts.list();
+      expect(restoredConcepts.length).toBe(origConcepts.length);
+      expect(restoredConcepts[0].title).toBe(origTitle);
+    });
+  });
+
+  describe('Round-Trip Fidelity on Large Synthetic Dataset', () => {
+    it('preserves 100% byte fidelity across export, clear, and restore on large synthetic dataset', async () => {
+      // Build a realistic large dataset: 10 documents, 50 chunks, 30 concepts, 20 dependencies, 40 attempts
+      await repos.workspace.getOrCreateDefault();
+
+      const largeDocs: DocumentRecord[] = [];
+      const largeChunks: DocumentChunkRecord[] = [];
+      const largeConcepts: ConceptRecord[] = [];
+      const largeDeps: ConceptDependencyRecord[] = [];
+      const largeAttempts: RecallAttemptRecord[] = [];
+
+      for (let d = 0; d < 10; d++) {
+        const docId = `syn-doc-${d}`;
+        largeDocs.push({
+          id: docId,
+          filename: `module-${d}.pdf`,
+          fileType: 'pdf',
+          fileSize: 1024 * (d + 1),
+          extractedText: `Comprehensive chapter ${d} on systems engineering with in-depth analysis.`,
+          analysisStatus: 'completed',
+          contentHash: `hash-syn-doc-${d}`,
+          createdAt: '2026-06-01T12:00:00.000Z',
+          updatedAt: '2026-06-01T12:00:00.000Z',
+        });
+
+        for (let c = 0; c < 5; c++) {
+          const chunkId = `syn-chunk-${d}-${c}`;
+          largeChunks.push({
+            id: chunkId,
+            documentId: docId,
+            chunkIndex: c,
+            text: `Explanatory chunk ${c} for module ${d}. Core mechanism details.`,
+            startOffset: c * 100,
+            endOffset: (c + 1) * 100,
+            contentHash: `hash-syn-chunk-${d}-${c}`,
+            createdAt: '2026-06-01T12:00:00.000Z',
+          });
+        }
+      }
+
+      for (let k = 0; k < 30; k++) {
+        const conceptId = `syn-concept-${k}`;
+        const docIndex = k % 10;
+        const chunkId = `syn-chunk-${docIndex}-${k % 5}`;
+
+        largeConcepts.push({
+          id: conceptId,
+          title: `Synthetic Concept ${k}`,
+          summary: `Summary explaining concept ${k} in depth.`,
+          canonicalExplanation: `Canonical explanation of concept ${k} mechanisms and nuances.`,
+          keyTerms: [`term-${k}a`, `term-${k}b`],
+          sourceChunkIds: [chunkId],
+          tier: (k % 3) as 0 | 1 | 2,
+          status: 'available',
+          confidence: 0.95,
+          extractionOrder: k,
+          createdAt: '2026-06-01T12:00:00.000Z',
+          updatedAt: '2026-06-01T12:00:00.000Z',
+        });
+
+        if (k > 0 && k % 2 === 0) {
+          largeDeps.push({
+            id: `syn-dep-${k}`,
+            prerequisiteId: `syn-concept-${k - 2}`,
+            dependentConceptId: conceptId,
+            confidence: 0.88,
+            removed: false,
+            createdAt: '2026-06-01T12:00:00.000Z',
+          });
+        }
+      }
+
+      for (let a = 0; a < 40; a++) {
+        largeAttempts.push({
+          id: `syn-attempt-${a}`,
+          sessionId: 'syn-session-1',
+          questionId: `syn-q-${a % 10}`,
+          conceptId: `syn-concept-${a % 30}`,
+          answerText: `Student comprehensive explanation for attempt ${a}. Demonstrating clear mastery.`,
+          confidence: 'high',
+          qualityGrade: 4,
+          compositeScore: 85,
+          semanticScore: 82,
+          judgeScore: 87,
+          evaluationMode: 'hybrid',
+          pendingEvaluation: false,
+          createdAt: '2026-06-01T12:00:00.000Z',
+        });
+      }
+
+      // Write dataset to database
+      await repos.documents.putMany(largeDocs);
+      await repos.chunks.putMany(largeChunks);
+      await repos.concepts.putMany(largeConcepts);
+      await repos.dependencies.putMany(largeDeps);
+      await repos.attempts.putMany(largeAttempts);
+
+      // Export
+      const exportedEnvelope = await createBackupEnvelope(repos);
+      const exportedJson = JSON.stringify(exportedEnvelope);
+
+      // Validate
+      const validation = validateBackupFile(exportedJson, exportedJson.length);
+      expect(validation.valid).toBe(true);
+      expect(validation.errors).toHaveLength(0);
+
+      // Clear database completely
+      await repos.documents.clear();
+      await repos.chunks.clear();
+      await repos.concepts.clear();
+      await repos.dependencies.clear();
+      await repos.attempts.clear();
+
+      expect((await repos.documents.list()).length).toBe(0);
+      expect((await repos.concepts.list()).length).toBe(0);
+
+      // Re-import
+      const importResult = await executeImport(validation.parsedEnvelope!, 'replace_all', repos);
+      expect(importResult.importedCounts.documents).toBe(10);
+      expect(importResult.importedCounts.documentChunks).toBe(50);
+      expect(importResult.importedCounts.concepts).toBe(30);
+      expect(importResult.importedCounts.recallAttempts).toBe(40);
+
+      // Verify 100% round-trip fidelity
+      const reimportedEnvelope = await createBackupEnvelope(repos);
+      expect(reimportedEnvelope.documents.length).toBe(largeDocs.length);
+      expect(reimportedEnvelope.documentChunks.length).toBe(largeChunks.length);
+      expect(reimportedEnvelope.concepts.length).toBe(largeConcepts.length);
+      expect(reimportedEnvelope.conceptDependencies.length).toBe(largeDeps.length);
+      expect(reimportedEnvelope.recallAttempts.length).toBe(largeAttempts.length);
+
+      // Deep compare first and last items by unique ID
+      const reimportedDoc0 = reimportedEnvelope.documents.find((d) => d.id === largeDocs[0].id);
+      expect(reimportedDoc0).toEqual(largeDocs[0]);
+
+      const reimportedConcept29 = reimportedEnvelope.concepts.find(
+        (c) => c.id === largeConcepts[29].id,
+      );
+      expect(reimportedConcept29).toEqual(largeConcepts[29]);
+
+      const reimportedAttempt39 = reimportedEnvelope.recallAttempts.find(
+        (a) => a.id === largeAttempts[39].id,
+      );
+      expect(reimportedAttempt39).toEqual(largeAttempts[39]);
+    });
   });
 });

@@ -3,10 +3,12 @@ import {
   type BackupPreviewSummary,
 } from '@/types/domain';
 import { nowISO } from '@/lib/utils/clock';
+import { generateId } from '@/lib/utils/id';
 import {
   SCHEMA_VERSION,
   APP_VERSION,
   MAX_BACKUP_SIZE_BYTES,
+  MAX_RECORDS_PER_STORE,
   BackupEnvelopeSchema,
   containsPrototypePollution,
 } from './schema';
@@ -20,9 +22,19 @@ export interface ImportValidationResult {
   parsedEnvelope?: EduMentorBackupEnvelope;
 }
 
+export type ImportConflictPolicy =
+  | 'keep_local'
+  | 'prefer_imported'
+  | 'import_as_copy'
+  | 'replace_all'
+  | 'merge'
+  | 'replace';
+
 export interface ImportExecutionResult {
-  mode: 'merge' | 'replace';
+  mode: ImportConflictPolicy;
   importedCounts: Record<string, number>;
+  updatedCount: number;
+  copiedCount: number;
   skippedCount: number;
   rollbackExport?: EduMentorBackupEnvelope;
 }
@@ -206,6 +218,10 @@ export function validateBackupFile(
   ];
 
   for (const [storeName, items] of storeArrays) {
+    if (items.length > MAX_RECORDS_PER_STORE) {
+      errors.push(`Store "${storeName}" exceeds maximum limit of ${MAX_RECORDS_PER_STORE} records (contains ${items.length}).`);
+      break;
+    }
     const idSet = new Set<string>();
     for (const item of items) {
       if (idSet.has(item.id)) {
@@ -306,89 +322,93 @@ export function validateBackupFile(
 }
 
 /**
- * Execute import of a validated backup envelope in Merge or Replace mode.
+ * Execute import of a validated backup envelope according to selectable conflict policy:
+ * - 'replace_all' (or 'replace'): Generates rollback snapshot, clears all stores, and loads incoming data.
+ * - 'keep_local' (or 'merge'): Keeps existing record on ID collision; inserts non-colliding records.
+ * - 'prefer_imported': Overwrites existing local record on ID collision; inserts non-colliding records.
+ * - 'import_as_copy': Generates new IDs for colliding records and remaps relational keys.
  */
 export async function executeImport(
   envelope: EduMentorBackupEnvelope,
-  mode: 'merge' | 'replace',
+  mode: ImportConflictPolicy,
   repos: StorageRepositories,
 ): Promise<ImportExecutionResult> {
+  const normalizedPolicy: 'replace_all' | 'keep_local' | 'prefer_imported' | 'import_as_copy' =
+    mode === 'replace'
+      ? 'replace_all'
+      : mode === 'merge'
+        ? 'keep_local'
+        : mode;
+
   let rollbackExport: EduMentorBackupEnvelope | undefined;
 
-  if (mode === 'replace') {
-    // Generate safety rollback backup before replacement
+  // 1. REPLACE ALL POLICY
+  if (normalizedPolicy === 'replace_all') {
     rollbackExport = await createBackupEnvelope(repos);
 
-    // Clear existing data across all stores
-    await Promise.all([
-      repos.documents.clear(),
-      repos.chunks.clear(),
-      repos.subjects.clear(),
-      repos.concepts.clear(),
-      repos.dependencies.clear(),
-      repos.sessions.clear(),
-      repos.studyPath.clear(),
-      repos.questions.clear(),
-      repos.attempts.clear(),
-      repos.mastery.clear(),
-      repos.spacedRepetition.clear(),
-      repos.messages.clear(),
-      repos.events.clear(),
-      repos.workspace.clear(),
-    ]);
+    try {
+      // Clear existing data across all stores
+      await Promise.all([
+        repos.documents.clear(),
+        repos.chunks.clear(),
+        repos.subjects.clear(),
+        repos.concepts.clear(),
+        repos.dependencies.clear(),
+        repos.sessions.clear(),
+        repos.studyPath.clear(),
+        repos.questions.clear(),
+        repos.attempts.clear(),
+        repos.mastery.clear(),
+        repos.spacedRepetition.clear(),
+        repos.messages.clear(),
+        repos.events.clear(),
+        repos.workspace.clear(),
+      ]);
 
-    // Insert new records
-    await Promise.all([
-      repos.workspace.put(envelope.workspace),
-      repos.documents.putMany(envelope.documents),
-      repos.chunks.putMany(envelope.documentChunks),
-      repos.subjects.putMany(envelope.subjects),
-      repos.concepts.putMany(envelope.concepts),
-      repos.dependencies.putMany(envelope.conceptDependencies),
-      repos.sessions.putMany(envelope.studySessions),
-      repos.studyPath.putMany(envelope.studyPathItems),
-      repos.questions.putMany(envelope.recallQuestions),
-      repos.attempts.putMany(envelope.recallAttempts),
-      repos.mastery.putMany(envelope.masteryStates),
-      repos.spacedRepetition.putMany(envelope.spacedRepetitionStates),
-      repos.messages.putMany(envelope.conversationMessages),
-      envelope.learningEvents ? repos.events.putMany(envelope.learningEvents) : Promise.resolve(),
-    ]);
+      // Insert new records
+      await Promise.all([
+        repos.workspace.put(envelope.workspace),
+        repos.documents.putMany(envelope.documents),
+        repos.chunks.putMany(envelope.documentChunks),
+        repos.subjects.putMany(envelope.subjects),
+        repos.concepts.putMany(envelope.concepts),
+        repos.dependencies.putMany(envelope.conceptDependencies),
+        repos.sessions.putMany(envelope.studySessions),
+        repos.studyPath.putMany(envelope.studyPathItems),
+        repos.questions.putMany(envelope.recallQuestions),
+        repos.attempts.putMany(envelope.recallAttempts),
+        repos.mastery.putMany(envelope.masteryStates),
+        repos.spacedRepetition.putMany(envelope.spacedRepetitionStates),
+        repos.messages.putMany(envelope.conversationMessages),
+        envelope.learningEvents ? repos.events.putMany(envelope.learningEvents) : Promise.resolve(),
+      ]);
 
-    return {
-      mode: 'replace',
-      importedCounts: {
-        documents: envelope.documents.length,
-        documentChunks: envelope.documentChunks.length,
-        concepts: envelope.concepts.length,
-        recallAttempts: envelope.recallAttempts.length,
-      },
-      skippedCount: 0,
-      rollbackExport,
-    };
-  }
-
-  // Merge mode: "keep existing record on ID conflict, report skipped count"
-  let skipped = 0;
-
-  async function mergeStore<T extends { id: string }>(
-    existingItems: T[],
-    newItems: T[],
-    putFn: (item: T) => Promise<void>,
-  ): Promise<number> {
-    const existingIds = new Set(existingItems.map((i) => i.id));
-    let inserted = 0;
-    for (const item of newItems) {
-      if (existingIds.has(item.id)) {
-        skipped++;
-      } else {
-        await putFn(item);
-        inserted++;
+      return {
+        mode,
+        importedCounts: {
+          documents: envelope.documents.length,
+          documentChunks: envelope.documentChunks.length,
+          concepts: envelope.concepts.length,
+          recallAttempts: envelope.recallAttempts.length,
+        },
+        updatedCount: 0,
+        copiedCount: 0,
+        skippedCount: 0,
+        rollbackExport,
+      };
+    } catch (err) {
+      // If replace fails, attempt emergency restore from rollback snapshot
+      console.warn('Replace import failed, attempting emergency rollback restore...');
+      try {
+        await executeImport(rollbackExport, 'replace_all', repos);
+      } catch (rollbackErr) {
+        console.error('Emergency rollback failed:', rollbackErr);
       }
+      throw err;
     }
-    return inserted;
   }
 
+  // 2. FETCH CURRENT LOCAL STORE RECORDS FOR COLLISION DETECTION
   const [
     curDocs,
     curChunks,
@@ -419,30 +439,190 @@ export async function executeImport(
     repos.events.list(),
   ]);
 
-  const docCount = await mergeStore(curDocs, envelope.documents, (d) => repos.documents.put(d));
-  const chunkCount = await mergeStore(curChunks, envelope.documentChunks, (c) => repos.chunks.put(c));
-  await mergeStore(curSubjects, envelope.subjects, (s) => repos.subjects.put(s));
-  const conceptCount = await mergeStore(curConcepts, envelope.concepts, (c) => repos.concepts.put(c));
-  await mergeStore(curDeps, envelope.conceptDependencies, (d) => repos.dependencies.put(d));
-  await mergeStore(curSessions, envelope.studySessions, (s) => repos.sessions.put(s));
-  await mergeStore(curItems, envelope.studyPathItems, (i) => repos.studyPath.put(i));
-  await mergeStore(curQuestions, envelope.recallQuestions, (q) => repos.questions.put(q));
-  const attemptCount = await mergeStore(curAttempts, envelope.recallAttempts, (a) => repos.attempts.put(a));
-  await mergeStore(curMastery, envelope.masteryStates, (m) => repos.mastery.put(m));
-  await mergeStore(curSr, envelope.spacedRepetitionStates, (s) => repos.spacedRepetition.put(s));
-  await mergeStore(curMessages, envelope.conversationMessages, (m) => repos.messages.put(m));
+  let skippedCount = 0;
+  let updatedCount = 0;
+  let copiedCount = 0;
+
+  // Track ID remappings for 'import_as_copy'
+  const idMap = new Map<string, string>();
+
+  async function applyStoreRecords<T extends { id: string }>(
+    existingItems: T[],
+    incomingItems: T[],
+    putFn: (item: T) => Promise<void>,
+    remapFn?: (item: T, idMap: Map<string, string>) => T,
+  ): Promise<number> {
+    const existingIds = new Set(existingItems.map((i) => i.id));
+    let storeImported = 0;
+
+    for (const rawItem of incomingItems) {
+      let item = rawItem;
+      const collision = existingIds.has(item.id);
+
+      if (collision) {
+        if (normalizedPolicy === 'keep_local') {
+          skippedCount++;
+          continue;
+        } else if (normalizedPolicy === 'prefer_imported') {
+          await putFn(item);
+          updatedCount++;
+          continue;
+        } else if (normalizedPolicy === 'import_as_copy') {
+          const newId = generateId();
+          idMap.set(item.id, newId);
+          item = { ...item, id: newId };
+          copiedCount++;
+        }
+      }
+
+      if (remapFn && idMap.size > 0) {
+        item = remapFn(item, idMap);
+      }
+
+      await putFn(item);
+      storeImported++;
+    }
+
+    return storeImported;
+  }
+
+  // Documents
+  const docCount = await applyStoreRecords(curDocs, envelope.documents, (d) => repos.documents.put(d));
+
+  // Chunks (remap documentId)
+  const chunkCount = await applyStoreRecords(
+    curChunks,
+    envelope.documentChunks,
+    (c) => repos.chunks.put(c),
+    (c, map) => ({
+      ...c,
+      documentId: map.get(c.documentId) ?? c.documentId,
+    }),
+  );
+
+  // Subjects
+  await applyStoreRecords(curSubjects, envelope.subjects, (s) => repos.subjects.put(s));
+
+  // Concepts (remap documentId and sourceChunkIds)
+  const conceptCount = await applyStoreRecords(
+    curConcepts,
+    envelope.concepts,
+    (c) => repos.concepts.put(c),
+    (c, map) => ({
+      ...c,
+      sourceChunkIds: (c.sourceChunkIds ?? []).map((id) => map.get(id) ?? id),
+    }),
+  );
+
+  // Dependencies (remap prerequisiteId and dependentConceptId)
+  await applyStoreRecords(
+    curDeps,
+    envelope.conceptDependencies,
+    (d) => repos.dependencies.put(d),
+    (d, map) => ({
+      ...d,
+      prerequisiteId: map.get(d.prerequisiteId) ?? d.prerequisiteId,
+      dependentConceptId: map.get(d.dependentConceptId) ?? d.dependentConceptId,
+    }),
+  );
+
+  // Study Sessions
+  await applyStoreRecords(curSessions, envelope.studySessions, (s) => repos.sessions.put(s));
+
+  // Study Path Items (remap sessionId and conceptId)
+  await applyStoreRecords(
+    curItems,
+    envelope.studyPathItems,
+    (i) => repos.studyPath.put(i),
+    (i, map) => ({
+      ...i,
+      sessionId: map.get(i.sessionId) ?? i.sessionId,
+      conceptId: map.get(i.conceptId) ?? i.conceptId,
+    }),
+  );
+
+  // Recall Questions (remap conceptId)
+  await applyStoreRecords(
+    curQuestions,
+    envelope.recallQuestions,
+    (q) => repos.questions.put(q),
+    (q, map) => ({
+      ...q,
+      conceptId: map.get(q.conceptId) ?? q.conceptId,
+    }),
+  );
+
+  // Recall Attempts (remap conceptId and sessionId)
+  const attemptCount = await applyStoreRecords(
+    curAttempts,
+    envelope.recallAttempts,
+    (a) => repos.attempts.put(a),
+    (a, map) => ({
+      ...a,
+      conceptId: map.get(a.conceptId) ?? a.conceptId,
+      sessionId: map.get(a.sessionId) ?? a.sessionId,
+    }),
+  );
+
+  // Mastery States (remap conceptId)
+  await applyStoreRecords(
+    curMastery,
+    envelope.masteryStates,
+    (m) => repos.mastery.put(m),
+    (m, map) => ({
+      ...m,
+      conceptId: map.get(m.conceptId) ?? m.conceptId,
+    }),
+  );
+
+  // Spaced Repetition States (remap conceptId)
+  await applyStoreRecords(
+    curSr,
+    envelope.spacedRepetitionStates,
+    (s) => repos.spacedRepetition.put(s),
+    (s, map) => ({
+      ...s,
+      conceptId: map.get(s.conceptId) ?? s.conceptId,
+    }),
+  );
+
+  // Conversation Messages (remap sessionId)
+  await applyStoreRecords(
+    curMessages,
+    envelope.conversationMessages,
+    (m) => repos.messages.put(m),
+    (m, map) => ({
+      ...m,
+      sessionId: map.get(m.sessionId) ?? m.sessionId,
+    }),
+  );
+
+  // Learning Events
   if (envelope.learningEvents) {
-    await mergeStore(curEvents, envelope.learningEvents, (e) => repos.events.put(e));
+    await applyStoreRecords(curEvents, envelope.learningEvents, (e) => repos.events.put(e));
   }
 
   return {
-    mode: 'merge',
+    mode,
     importedCounts: {
       documents: docCount,
       documentChunks: chunkCount,
       concepts: conceptCount,
       recallAttempts: attemptCount,
     },
-    skippedCount: skipped,
+    updatedCount,
+    copiedCount,
+    skippedCount,
+    rollbackExport,
   };
+}
+
+/**
+ * Restores a previously created rollback snapshot.
+ */
+export async function restoreRollbackData(
+  rollbackEnvelope: EduMentorBackupEnvelope,
+  repos: StorageRepositories,
+): Promise<ImportExecutionResult> {
+  return executeImport(rollbackEnvelope, 'replace_all', repos);
 }

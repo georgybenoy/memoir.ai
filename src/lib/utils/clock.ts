@@ -39,3 +39,17 @@ export function _resetNow(): void {
 }
 
 export const _resetClock = _resetNow;
+export const resetClock = _resetNow;
+
+/**
+ * Override the clock with a fixed date, epoch ms, or custom function.
+ */
+export function setClockOverride(dateOrFn: Date | number | NowFn): void {
+  if (typeof dateOrFn === 'function') {
+    _nowFn = dateOrFn;
+  } else if (typeof dateOrFn === 'number') {
+    _nowFn = () => new Date(dateOrFn);
+  } else {
+    _nowFn = () => dateOrFn;
+  }
+}

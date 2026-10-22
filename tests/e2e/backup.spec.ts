@@ -3,10 +3,7 @@ import { test, expect } from '@playwright/test';
 test.describe('Backup Export and Clear Data Confirmation Flow', () => {
   test.beforeEach(async ({ page }) => {
     await page.setViewportSize({ width: 1280, height: 800 });
-    await page.goto('/');
-
-    const nav = page.getByRole('navigation', { name: /workspace navigation/i });
-    await nav.getByRole('button', { name: 'Data & Settings' }).click();
+    await page.goto('/app/settings');
     await expect(page.getByRole('heading', { name: 'Data & Settings' })).toBeVisible();
   });
 

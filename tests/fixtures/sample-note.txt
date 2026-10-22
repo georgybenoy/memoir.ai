@@ -1,0 +1,10 @@
+Title: Operating Systems and Concurrency
+
+Chapter 1: Process Management
+A process is an instance of a computer program that is being executed by one or many threads. It contains the program code and its current activity. Each process is allocated a unique Process Identifier (PID), virtual address space, memory pages, open file descriptors, and CPU register state.
+
+Chapter 2: Threads and Concurrency
+Threads are lightweight units of execution within a process that share the same address space. Multithreading enables concurrent execution of multiple tasks within a single program. However, concurrent access to shared resources introduces race conditions, deadlocks, and priority inversion problems.
+
+Chapter 3: Synchronization Primitives
+Mutual exclusion primitives such as mutexes, semaphores, and condition variables are used to synchronize access to critical sections. A deadlock occurs when two or more processes are unable to proceed because each is waiting for the other to release a locked resource. Four Coffman conditions are required for deadlock: mutual exclusion, hold and wait, no preemption, and circular wait.

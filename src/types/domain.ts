@@ -8,15 +8,19 @@ export type DocumentAnalysisStatus = 'pending' | 'processing' | 'completed' | 'f
 export type DocumentFileType = 'pdf' | 'txt' | 'md';
 
 export type ConceptStatus = 'locked' | 'available' | 'in_progress' | 'review_due' | 'mastered';
-export type EvaluationMode = 'hybrid' | 'judge-only' | 'fallback';
+export type EvaluationMode = 'hybrid' | 'judge_only' | 'judge-only' | 'pending' | 'fallback';
 export type ConfidenceLevel = 'low' | 'medium' | 'high';
+export type MasteryLevel = 'new' | 'learning' | 'familiar' | 'proficient' | 'mastered';
 export type StudySourceMode = 'document' | 'topic';
 export type MessageRole = 'user' | 'assistant' | 'system';
 
+export type DifficultyPreference = 'beginner' | 'intermediate' | 'advanced';
+
 export interface WorkspacePreferences {
   model: string;
-  difficulty: 'beginner' | 'intermediate' | 'advanced';
+  difficulty: DifficultyPreference;
   reducedMotion: boolean;
+  reviewNotifications?: boolean;
 }
 
 export interface WorkspaceRecord {
@@ -96,6 +100,7 @@ export interface StudySessionRecord {
   machineState: string; // 13-state machine state (IDLE, STUDYING_CONCEPT, etc.)
   currentConceptId?: string;
   draftAnswer?: string;
+  selectedConfidence?: number; // 1 (Not very), 2 (Somewhat), 3 (Very)
   sourceMode: StudySourceMode;
   startedAt: string;
   updatedAt: string;
@@ -131,9 +136,9 @@ export interface RecallAttemptRecord {
   conceptId: string;
   answerText: string;
   confidence: ConfidenceLevel | number;
-  semanticScore?: number; // 0-100
-  judgeScore?: number; // 0-100
-  compositeScore?: number; // 0-100
+  semanticScore?: number | null; // 0-100
+  judgeScore?: number | null; // 0-100
+  compositeScore?: number | null; // 0-100
   qualityGrade: number; // 0-5 for SM-2
   evaluationMode: EvaluationMode;
   rubric?: Record<string, unknown>;
@@ -146,9 +151,14 @@ export interface MasteryStateRecord {
   conceptId: string;
   level: number; // 0-4
   percentage: number; // 0-100
+  masteryLevel?: MasteryLevel;
+  masteryPercent?: number; // 0-100 alias
   bestScore: number; // 0-100
   attemptCount: number;
   lastAttemptAt?: string;
+  reviewStatus?: 'none' | 'due' | 'completed';
+  scoreHistory?: number[];
+  confidenceHistory?: number[];
   updatedAt: string;
 }
 

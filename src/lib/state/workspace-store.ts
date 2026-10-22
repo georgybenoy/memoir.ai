@@ -2,7 +2,13 @@ import { create } from 'zustand';
 import { generateId } from '@/lib/utils/id';
 
 export type WorkspaceView =
-  'workspace' | 'materials' | 'concepts' | 'recall' | 'review' | 'settings';
+  | 'workspace'
+  | 'materials'
+  | 'concepts'
+  | 'recall'
+  | 'review'
+  | 'progress'
+  | 'settings';
 
 export type ToastType = 'info' | 'success' | 'warning' | 'error';
 

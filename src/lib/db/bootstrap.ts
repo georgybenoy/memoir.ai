@@ -4,7 +4,7 @@ import { createMemoryRepositories } from './repositories/memory-repositories';
 import { type StorageRepositories } from './repositories/types';
 import { type WorkspaceRecord } from '@/types/domain';
 import { useSaveStatusStore } from '@/lib/state/save-status-store';
-import { removeDatabase, DB_NAME } from './indexeddb';
+import { openDatabase, removeDatabase, DB_NAME, type StoreName } from './indexeddb';
 
 export interface BootstrapResult {
   repos: StorageRepositories;
@@ -81,7 +81,32 @@ export async function clearAllLocalData(dbName = DB_NAME): Promise<WorkspaceReco
   useSaveStatusStore.getState().setSaving();
 
   if (_cachedMode === 'indexeddb') {
-    await removeDatabase(dbName);
+    try {
+      const db = await openDatabase(dbName);
+      const storeNames: StoreName[] = [
+        'workspace',
+        'documents',
+        'documentChunks',
+        'subjects',
+        'concepts',
+        'conceptDependencies',
+        'studySessions',
+        'studyPathItems',
+        'recallQuestions',
+        'recallAttempts',
+        'masteryStates',
+        'spacedRepetitionStates',
+        'conversationMessages',
+        'learningEvents',
+      ];
+      const tx = db.transaction(storeNames, 'readwrite');
+      for (const s of storeNames) {
+        await tx.objectStore(s).clear();
+      }
+      await tx.done;
+    } catch {
+      await removeDatabase(dbName);
+    }
   }
 
   // Clear in-memory instance cache to force a fresh connection

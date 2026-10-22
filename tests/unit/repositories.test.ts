@@ -38,7 +38,7 @@ describe('IdbRepositories CRUD & Index Queries', () => {
   it('handles workspace bootstrap and preference updates', async () => {
     const ws = await repos.workspace.getOrCreateDefault();
     expect(ws).toBeDefined();
-    expect(ws.id).toMatch(/^[0-9a-f-]{36}$/i);
+    expect(ws.id).toBe('default-workspace');
     expect(ws.preferences.model).toBe('gemini-2.5-flash');
     expect(ws.preferences.difficulty).toBe('intermediate');
 

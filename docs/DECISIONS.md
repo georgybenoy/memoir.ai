@@ -93,3 +93,37 @@ Backups export to a versioned JSON envelope (`format: "edumentor-backup"`) witho
 
 **Rationale:** Prevents security vulnerabilities (prototype pollution, script injection) and avoids catastrophic accidental data loss during restore operations.
 
+## D-016: Server-Only Gemini Gateway with 1-Shot Repair, Timeout Bounds, and Safe Logging
+
+The Gemini gateway (`src/lib/ai/gemini.ts`) starts with `import "server-only"`. Routes configure `runtime = "nodejs"` and `maxDuration = 60` to operate comfortably within Vercel Pro function execution limits (60s) and Gemini flash response times. Gateway calls enforce a hard 45s timeout (`DEFAULT_AI_TIMEOUT_MS = 45000`) and bounded exponential backoff with jitter (max 2 retries) for transient errors (429, 500, 503, network, timeout). Model selection is restricted to `ALLOWED_MODELS` with default `gemini-2.5-flash`; unallowed models are rejected with `MODEL_NOT_ALLOWED`. Schema-validated outputs perform exactly one repair retry on malformed JSON before failing with `AI_MALFORMED_RESPONSE`. A shared `withAiGuard` wrapper enforces 512 KiB payload limits, SHA-256 hashed client IP sliding-window rate limits (25 req/min), an 8-request concurrency cap, and `safeLog` privacy enforcement (never logging bodies, notes, answers, keys, or raw IPs).
+
+**Rationale:** Completely protects API keys from client bundling, prevents abuse and denial-of-service, bounds serverless execution costs, and enforces zero-data-leakage privacy invariants.
+
+## D-017: Concept Extraction Pipeline, Provenance Validation, and Offline Teaching Fallback
+
+The concept extraction pipeline (`src/features/concepts/`) batches document chunks into token-budgeted windows (max 10 chunks, 10,000 characters) and executes sequential API extraction with progress callbacks and cancellation support. Extracted concepts undergo multi-batch deduplication based on normalized titles, key term Jaccard similarity (>= 0.5), and summary token overlap. Hallucinated chunk IDs are validated against genuine document chunks and stripped, with confidence penalized to <= 0.4 if all citations were invented. Valid prerequisite titles are resolved to extracted concept IDs and assigned topological tiers (0: foundational, 1: core, 2+: advanced), with concepts, dependencies, and document status committed in one atomic IndexedDB transaction. When Gemini is unavailable, the Socratic teaching service provides a deterministic offline fallback presenting the stored canonical explanation with an honest "tutor unavailable" notice.
+
+**Rationale:** Preserves strict source provenance, prevents false dependency claims, guarantees local data integrity across failures, and maintains honest communication without fabricating AI outputs.
+
+## D-018: Native Pure TypeScript Dependency Graph Pipeline (No External Graph Library)
+
+The dependency graph (`src/features/dependency-graph/`) is implemented in pure TypeScript without third-party graph libraries (such as graphology, dagre, or cytoscape). It implements Tarjan's Strongly Connected Components for cycle detection, deterministic cycle breaking (ranking candidates by lowest confidence, keeping dependent concepts with lower extractionOrder last, then lexicographic `(fromId, toId)`), Kahn's topological sort with stable tie-breaking (`extractionOrder` then `id`), longest-path depth tiers, and normalized downstream influence calculation in `[0, 1]`.
+
+**Rationale:** A native implementation avoids heavy bundle overhead, prevents external dependency rot, guarantees byte-identical deterministic DAG resolution across runs and platforms, adheres strictly to pedagogical tie-breaking invariants, and ensures zero-overhead serialization into IndexedDB.
+
+---
+
+## D-019: Vector SVG Avatar, Product-Story Landing Page, and Complete Workspace Polish
+
+The teacher avatar (`src/components/avatar/`) is built entirely as lightweight vector SVG/CSS with 11 distinct pedagogical expressions driven by a deterministic mapping table from the conversation state machine and recall evaluation grades (q=5 Celebration, q=4 Happy, q=3 Almost correct, q<=2 Supportive, Idle, Listening, Explaining, Thinking, Reminder). The landing page (`/`) implements the exact approved product-story copy from DESIGN §12, featuring authentic workspace components labelled as sample data, 3 How it works steps, 6 Learning tools cards, the constructive study loop, an accessible 7-topic FAQ accordion, and atmospheric radial gradients with a low-opacity grid texture. Settings screen exposes Gemini model allowlist selection from `/api/health`, 3-tier difficulty preferences, and an explicit `navigator.storage.persist()` caller reporting real browser outcomes, strictly adhering to zero-secret client boundaries.
+
+---
+
+## D-020: Standalone JSON Backup Format and Omission of Optional ZIP Packaging
+
+EduMentor implements single-file JSON backup and restore (`format: "edumentor-backup"`). The optional ZIP packaging mentioned as an alternative in early specifications was skipped in favor of the self-contained JSON envelope.
+
+**Rationale:** The JSON envelope already preserves all document texts, chunk offsets, concepts, graph dependencies, study paths, recall attempts, and spaced repetition states. Avoiding third-party compression libraries (such as JSZip) prevents unnecessary client bundle bloat, avoids binary parsing vulnerabilities, relies strictly on native browser JSON APIs, and guarantees 100% round-trip fidelity across devices.
+
+
+
