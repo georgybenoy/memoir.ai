@@ -2,6 +2,7 @@
 
 import * as React from 'react';
 import Link from 'next/link';
+import Image from 'next/image';
 import {
   ArrowRight,
   BookOpen,
@@ -106,12 +107,15 @@ export default function LandingPage() {
             href="/"
             className="flex items-center gap-2.5 font-bold text-lg tracking-tight text-[var(--text-primary)] hover:opacity-90 transition-opacity"
           >
-            <div
-              className="h-8 w-8 rounded-lg bg-[var(--primary)] flex items-center justify-center text-white font-black text-sm shadow-xs shadow-[var(--primary)]/30"
+            <Image
+              src="/logo.png"
+              alt=""
+              width={32}
+              height={32}
+              className="h-8 w-8 object-contain"
               aria-hidden="true"
-            >
-              E
-            </div>
+              priority
+            />
             <span className="text-lg tracking-tight font-extrabold text-[var(--text-primary)]">
               EduMentor
             </span>
@@ -847,9 +851,14 @@ export default function LandingPage() {
         <Container size="landing" className="space-y-6">
           <div className="flex flex-col sm:flex-row items-center justify-between gap-4">
             <div className="flex items-center gap-2">
-              <div className="h-6 w-6 rounded bg-[var(--primary)] flex items-center justify-center text-white font-bold text-xs">
-                E
-              </div>
+              <Image
+                src="/logo.png"
+                alt=""
+                width={24}
+                height={24}
+                className="h-6 w-6 object-contain"
+                aria-hidden="true"
+              />
               <span className="font-bold text-sm text-[var(--text-primary)]">EduMentor</span>
             </div>
             <nav aria-label="Footer navigation" className="flex flex-wrap items-center justify-center gap-6">

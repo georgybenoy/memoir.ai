@@ -1,6 +1,7 @@
 'use client';
 
 import * as React from 'react';
+import Image from 'next/image';
 import {
   Menu,
   PanelRightClose,
@@ -8,7 +9,6 @@ import {
   Wifi,
   WifiOff,
   HardDrive,
-  Sparkles,
   BookMarked,
 } from 'lucide-react';
 import { useWorkspaceStore } from '@/lib/state/workspace-store';
@@ -47,9 +47,15 @@ export const WorkspaceHeader: React.FC<WorkspaceHeaderProps> = ({ onMobileNavTog
         </Button>
 
         <div className="flex items-center gap-2">
-          <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-[var(--primary)] text-white shadow-xs">
-            <Sparkles className="h-4 w-4" aria-hidden="true" />
-          </div>
+          <Image
+            src="/logo.png"
+            alt=""
+            width={32}
+            height={32}
+            className="h-8 w-8 object-contain"
+            aria-hidden="true"
+            priority
+          />
           <span className="text-base font-bold tracking-tight text-[var(--text-primary)]">
             EduMentor
           </span>
