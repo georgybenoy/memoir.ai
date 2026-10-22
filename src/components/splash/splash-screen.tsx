@@ -51,10 +51,11 @@ export function SplashScreen() {
     const originalOverflow = document.body.style.overflow;
     document.body.style.overflow = 'hidden';
 
-    // Progress animation (~1.6s total duration, or 400ms for reduced motion)
-    const totalDuration = prefersReducedMotion ? 400 : 1600;
+    // Progress animation (~3.6s progress duration + 300ms completion hold = ~4.5s total visible time)
+    const totalDuration = prefersReducedMotion ? 600 : 3600;
     const startTime = performance.now();
     let rafId: number;
+    let pauseTimeoutId: ReturnType<typeof setTimeout>;
     let exitTimeoutId: ReturnType<typeof setTimeout>;
 
     const tick = (currentTime: number) => {
@@ -72,17 +73,21 @@ export function SplashScreen() {
           // ignore storage error
         }
 
-        // Trigger exit animation: opacity 0, scale 1.04
-        setIsExiting(true);
+        // Hold at 100% briefly so "Ready to learn deeply." is comfortably absorbed
+        const holdDuration = prefersReducedMotion ? 50 : 300;
+        pauseTimeoutId = setTimeout(() => {
+          // Trigger exit animation: opacity 0, scale 1.04
+          setIsExiting(true);
 
-        // Restore body scroll
-        document.body.style.overflow = originalOverflow;
+          // Restore body scroll
+          document.body.style.overflow = originalOverflow;
 
-        // Unmount node completely after 600ms exit transition
-        const exitDuration = prefersReducedMotion ? 150 : 600;
-        exitTimeoutId = setTimeout(() => {
-          setIsDismissed(true);
-        }, exitDuration);
+          // Unmount node completely after 600ms exit transition
+          const exitDuration = prefersReducedMotion ? 150 : 600;
+          exitTimeoutId = setTimeout(() => {
+            setIsDismissed(true);
+          }, exitDuration);
+        }, holdDuration);
       }
     };
 
@@ -90,6 +95,7 @@ export function SplashScreen() {
 
     return () => {
       cancelAnimationFrame(rafId);
+      clearTimeout(pauseTimeoutId);
       clearTimeout(exitTimeoutId);
       document.body.style.overflow = originalOverflow;
     };
