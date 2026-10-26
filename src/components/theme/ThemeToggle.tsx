@@ -128,6 +128,7 @@ export const ThemeToggle: React.FC<ThemeToggleProps> = ({
               role="radio"
               data-testid={`theme-radio-${opt.id}`}
               aria-checked={isSelected}
+              suppressHydrationWarning
               onClick={(e) => {
                 const origin = { x: e.clientX, y: e.clientY };
                 void setMode(opt.id, origin);
@@ -157,6 +158,7 @@ export const ThemeToggle: React.FC<ThemeToggleProps> = ({
         ref={triggerRef}
         type="button"
         data-testid="theme-toggle-trigger"
+        suppressHydrationWarning
         aria-haspopup="menu"
         aria-expanded={isOpen}
         aria-label={`${mode === 'system' ? 'System' : mode === 'dark' ? 'Dark' : 'Light'} theme (currently ${resolvedTheme === 'dark' ? 'Dark' : 'Light'}). Change theme`}
@@ -172,7 +174,7 @@ export const ThemeToggle: React.FC<ThemeToggleProps> = ({
         className="flex min-h-[44px] min-w-[44px] items-center justify-center gap-2 rounded-lg border border-[var(--border-color)] bg-[var(--surface-raised)] px-2.5 py-1.5 text-xs text-[var(--text-secondary)] hover:text-[var(--text-primary)] hover:bg-[var(--surface-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)] transition-colors cursor-pointer select-none"
       >
         <CurrentIcon className="h-4 w-4 shrink-0 text-[var(--primary)]" aria-hidden="true" />
-        <span className="capitalize font-medium">{mode}</span>
+        <span className="capitalize font-medium" suppressHydrationWarning>{mode}</span>
       </button>
 
       {isOpen && (

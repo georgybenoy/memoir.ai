@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import {
   processMaterialLifecycle,
+  resumeMaterialAnalysis,
 } from '@/features/ingestion/processing-service';
 import { createMemoryRepositories } from '@/lib/db/repositories/memory-repositories';
 import { type StorageRepositories } from '@/lib/db/repositories/types';
@@ -212,4 +213,103 @@ describe('Processing Lifecycle State Machine (Phase R2)', () => {
     expect(finalConcepts.some((c) => c.title === 'Batch 1 Concept')).toBe(true);
     expect(finalConcepts.some((c) => c.title === 'Batch 2 Concept')).toBe(true);
   });
+
+  it('resumeMaterialAnalysis resumes directly from saved chunks without re-extracting PDF or failing with 0-byte buffer', async () => {
+    const file = createMockFile('Lecture_Notes.txt', 'Operating Systems and Virtual Memory architectures.');
+    const materialId = 'mat-pdf-resume-test';
+
+    // 1. Initial run fails at Gemini analysis
+    vi.spyOn(aiClient, 'fetchExtractConcepts').mockRejectedValueOnce(
+      new Error('Gemini API rate limit exceeded'),
+    );
+
+    const firstRun = await processMaterialLifecycle({
+      file,
+      materialId,
+      customRepos: repos,
+    });
+    expect(firstRun.success).toBe(false);
+
+    // Ensure chunks exist in storage
+    const chunks = await repos.chunks.listByMaterial(materialId);
+    expect(chunks.length).toBeGreaterThanOrEqual(1);
+
+    // Deliberately simulate detached/neutered 0-byte blob in materialFiles (as was happening with PDF.js)
+    await repos.materialFiles.put({
+      id: materialId,
+      filename: file.name,
+      mimeType: 'application/pdf',
+      size: 0,
+      blob: new Blob([], { type: 'application/pdf' }),
+      createdAt: new Date().toISOString(),
+    });
+
+    // 2. Now call resumeMaterialAnalysis - it should succeed using saved chunks and NOT fail with 0-byte PDF error!
+    vi.spyOn(aiClient, 'fetchExtractConcepts').mockResolvedValue({
+      concepts: [
+        {
+          tempId: 'temp-c1',
+          title: 'Virtual Memory',
+          summary: 'Virtual memory address translation.',
+          canonicalExplanation: 'MMU and TLB caching mechanism.',
+          keyTerms: ['mmu', 'tlb'],
+          prerequisiteTitles: [],
+          sourceChunkIds: [],
+          confidence: 0.92,
+        },
+      ],
+    });
+
+    const resumeResult = await resumeMaterialAnalysis(materialId, {
+      customRepos: repos,
+    });
+
+    expect(resumeResult.success).toBe(true);
+    expect(resumeResult.record.stage).toBe('COMPLETE');
+
+    const concepts = await repos.concepts.listByMaterial(materialId);
+    expect(concepts.length).toBe(1);
+    expect(concepts[0].title).toBe('Virtual Memory');
+  });
+
+  it('paces sequential batch extraction with throttle messages between batches', async () => {
+    const longContent = Array.from(
+      { length: 15 },
+      (_, i) => `Section ${i + 1}: Operating systems principles, kernel structures, memory isolation and hardware interrupts.`,
+    ).join('\n\n');
+    const file = createMockFile('ThrottledLecture.txt', longContent);
+    const materialId = 'mat-throttled-batch-test';
+
+    const messagesSeen: string[] = [];
+    vi.spyOn(aiClient, 'fetchExtractConcepts').mockResolvedValue({
+      concepts: [
+        {
+          tempId: 'temp-concept',
+          title: 'Kernel Architecture',
+          summary: 'Monolithic vs microkernel design.',
+          canonicalExplanation: 'Kernel privilege rings and syscalls.',
+          keyTerms: ['kernel', 'syscall'],
+          prerequisiteTitles: [],
+          sourceChunkIds: [],
+          confidence: 0.9,
+        },
+      ],
+    });
+
+    const result = await processMaterialLifecycle({
+      file,
+      materialId,
+      chunkOptions: { targetSize: 40, minSize: 20, overlap: 0 },
+      throttleDelayMs: 20, // small delay for unit test
+      customRepos: repos,
+      onProgress: (p) => {
+        if (p.message) messagesSeen.push(p.message);
+      },
+    });
+
+    expect(result.success).toBe(true);
+    // Verify throttling / pacing message was published
+    expect(messagesSeen.some((msg) => msg.includes('Pacing requests to respect Gemini API limits'))).toBe(true);
+  });
 });
+

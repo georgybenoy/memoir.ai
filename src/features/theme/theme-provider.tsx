@@ -7,6 +7,63 @@ import { getStorage } from '@/lib/db/bootstrap';
 
 const THEME_STORAGE_KEY = 'edumentor_theme';
 
+const themeListeners = new Set<() => void>();
+
+export function emitThemeChange(): void {
+  for (const listener of themeListeners) {
+    listener();
+  }
+}
+
+function subscribeTheme(callback: () => void): () => void {
+  themeListeners.add(callback);
+  const handleStorage = (e: StorageEvent) => {
+    if (e.key === THEME_STORAGE_KEY) {
+      callback();
+    }
+  };
+  window.addEventListener('storage', handleStorage);
+  return () => {
+    themeListeners.delete(callback);
+    window.removeEventListener('storage', handleStorage);
+  };
+}
+
+function getStoredTheme(): ThemeMode {
+  if (typeof window === 'undefined') return 'system';
+  try {
+    const stored = localStorage.getItem(THEME_STORAGE_KEY) as ThemeMode | null;
+    if (stored === 'light' || stored === 'dark' || stored === 'system') {
+      return stored;
+    }
+  } catch {
+    // localStorage unavailable / sandboxed
+  }
+  return 'system';
+}
+
+function getServerThemeSnapshot(): ThemeMode {
+  return 'system';
+}
+
+function subscribeSystemScheme(callback: () => void): () => void {
+  if (typeof window === 'undefined') return () => {};
+  const mq = window.matchMedia('(prefers-color-scheme: dark)');
+  mq.addEventListener('change', callback);
+  return () => {
+    mq.removeEventListener('change', callback);
+  };
+}
+
+function getSystemSchemeSnapshot(): ResolvedTheme {
+  if (typeof window === 'undefined') return 'dark';
+  return window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+}
+
+function getServerSystemSchemeSnapshot(): ResolvedTheme {
+  return 'dark';
+}
+
 const ThemeContext = React.createContext<ThemeContextValue | null>(null);
 
 export function useTheme(): ThemeContextValue {
@@ -56,25 +113,20 @@ export interface ThemeProviderProps {
 
 export const ThemeProvider: React.FC<ThemeProviderProps> = ({
   children,
-  defaultMode = 'system',
 }) => {
-  // Read initial mode from localStorage if present
-  const [mode, setModeState] = React.useState<ThemeMode>(() => {
-    if (typeof window === 'undefined') return defaultMode;
-    try {
-      const stored = localStorage.getItem(THEME_STORAGE_KEY) as ThemeMode | null;
-      if (stored === 'light' || stored === 'dark' || stored === 'system') {
-        return stored;
-      }
-    } catch {
-      // localStorage unavailable / sandboxed
-    }
-    return defaultMode;
-  });
-
-  const [resolvedTheme, setResolvedTheme] = React.useState<ResolvedTheme>(() =>
-    resolveThemeMode(mode)
+  const mode = React.useSyncExternalStore(
+    subscribeTheme,
+    getStoredTheme,
+    getServerThemeSnapshot
   );
+
+  const systemScheme = React.useSyncExternalStore(
+    subscribeSystemScheme,
+    getSystemSchemeSnapshot,
+    getServerSystemSchemeSnapshot
+  );
+
+  const resolvedTheme: ResolvedTheme = mode === 'system' ? systemScheme : mode;
 
   const [announcement, setAnnouncement] = React.useState<string>('');
   const activeTransitionRef = React.useRef<{ skipTransition?: () => void } | null>(null);
@@ -102,13 +154,6 @@ export const ThemeProvider: React.FC<ThemeProviderProps> = ({
     async (newMode: ThemeMode, origin?: { x: number; y: number }) => {
       const targetResolved = resolveThemeMode(newMode);
 
-      // Save to localStorage immediately
-      try {
-        localStorage.setItem(THEME_STORAGE_KEY, newMode);
-      } catch {
-        // Storage full or private mode
-      }
-
       // Check for reduced motion
       const prefersReducedMotion =
         typeof window !== 'undefined' &&
@@ -130,9 +175,13 @@ export const ThemeProvider: React.FC<ThemeProviderProps> = ({
       }
 
       const applyStateUpdates = () => {
+        try {
+          localStorage.setItem(THEME_STORAGE_KEY, newMode);
+        } catch {
+          // Storage full or private mode
+        }
+        emitThemeChange();
         applyThemeToDOM(targetResolved);
-        setModeState(newMode);
-        setResolvedTheme(targetResolved);
         setAnnouncement(`${targetResolved.charAt(0).toUpperCase() + targetResolved.slice(1)} theme on`);
       };
 
@@ -187,52 +236,6 @@ export const ThemeProvider: React.FC<ThemeProviderProps> = ({
     },
     [syncToIndexedDb]
   );
-
-  // Re-resolve on system color scheme changes when in 'system' mode
-  React.useEffect(() => {
-    if (mode !== 'system') return;
-
-    const mediaQuery = window.matchMedia('(prefers-color-scheme: dark)');
-    const handleChange = (e?: MediaQueryListEvent | MediaQueryList) => {
-      const isDark = typeof e?.matches === 'boolean' ? e.matches : mediaQuery.matches;
-      const currentResolved: ResolvedTheme = isDark ? 'dark' : 'light';
-      applyThemeToDOM(currentResolved);
-      setResolvedTheme(currentResolved);
-      setAnnouncement(`System theme adjusted to ${currentResolved}`);
-    };
-
-    if (mediaQuery.addEventListener) {
-      mediaQuery.addEventListener('change', handleChange);
-    } else if (mediaQuery.addListener) {
-      mediaQuery.addListener(handleChange);
-    }
-
-    return () => {
-      if (mediaQuery.removeEventListener) {
-        mediaQuery.removeEventListener('change', handleChange);
-      } else if (mediaQuery.removeListener) {
-        mediaQuery.removeListener(handleChange);
-      }
-    };
-  }, [mode]);
-
-  // Sync across tabs via storage event
-  React.useEffect(() => {
-    const handleStorage = (event: StorageEvent) => {
-      if (event.key === THEME_STORAGE_KEY && event.newValue) {
-        const externalMode = event.newValue as ThemeMode;
-        if (externalMode === 'light' || externalMode === 'dark' || externalMode === 'system') {
-          const targetResolved = resolveThemeMode(externalMode);
-          applyThemeToDOM(targetResolved);
-          setModeState(externalMode);
-          setResolvedTheme(targetResolved);
-        }
-      }
-    };
-
-    window.addEventListener('storage', handleStorage);
-    return () => window.removeEventListener('storage', handleStorage);
-  }, []);
 
   // Initial reconcile between localStorage and IndexedDB workspace preferences
   React.useEffect(() => {

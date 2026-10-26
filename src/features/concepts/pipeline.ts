@@ -27,6 +27,7 @@ export interface ConceptPipelineOptions {
   signal?: AbortSignal;
   onProgress?: (progress: ConceptPipelineProgress) => void;
   dbName?: string;
+  throttleDelayMs?: number;
 }
 
 const MAX_BATCH_CHUNKS = 10;
@@ -116,6 +117,9 @@ export async function extractConceptsForDocument(
     const allRawConcepts: ExtractedConceptDto[] = [];
 
     // --- STAGE 2: SEQUENTIAL EXTRACTION ---
+    const defaultThrottleMs = process.env.NODE_ENV === 'test' ? 10 : 12000;
+    const throttleMs = options.throttleDelayMs ?? defaultThrottleMs;
+
     for (let i = 0; i < batches.length; i++) {
       if (signal?.aborted) {
         throw new Error('Concept extraction cancelled by user.');
@@ -126,6 +130,26 @@ export async function extractConceptsForDocument(
         70,
         Math.floor(10 + (i / batches.length) * 60),
       );
+
+      // Throttling: if we've already dispatched a batch, pause before the next batch to respect Gemini 5 RPM limit
+      if (i > 0 && throttleMs > 0) {
+        const totalWaitSec = Math.ceil(throttleMs / 1000);
+        for (let sec = totalWaitSec; sec > 0; sec--) {
+          if (signal?.aborted) {
+            throw new Error('Concept extraction cancelled by user.');
+          }
+          onProgress?.({
+            stage: 'extracting',
+            percent: progressPercent,
+            message: `Pacing requests to respect Gemini API limits (waiting ${sec}s before batch ${batchNumber} of ${batches.length})...`,
+            currentBatch: batchNumber,
+            totalBatches: batches.length,
+            conceptsExtracted: allRawConcepts.length,
+          });
+          const sleepStep = Math.min(1000, throttleMs);
+          await new Promise((resolve) => setTimeout(resolve, sleepStep));
+        }
+      }
 
       onProgress?.({
         stage: 'extracting',

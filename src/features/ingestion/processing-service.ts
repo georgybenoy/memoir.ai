@@ -35,6 +35,7 @@ export interface ProcessMaterialOptions {
   signal?: AbortSignal;
   onProgress?: (record: MaterialProcessingRecord) => void;
   customRepos?: StorageRepositories;
+  throttleDelayMs?: number;
 }
 
 /**
@@ -87,20 +88,18 @@ export async function updateProcessingStage(
 export async function processMaterialLifecycle(
   options: ProcessMaterialOptions,
 ): Promise<{ success: boolean; materialId: string; record: MaterialProcessingRecord; error?: string }> {
-  const { file, subjectId, chunkOptions, signal, onProgress, customRepos } = options;
+  const { file, subjectId, chunkOptions, signal, onProgress, customRepos, throttleDelayMs } = options;
   const repos = customRepos ?? getStorage();
 
-  const buffer = await file.arrayBuffer();
-  const uint8 = new Uint8Array(buffer);
-  const fileHash = await computeFileHash(uint8);
-
   const materialId = options.materialId ?? generateId();
+  let currentRunningStage: ProcessingStage = 'SELECTED';
 
   // Helper to publish and persist progress
   async function notifyStage(
     stage: ProcessingStage,
     details: Partial<MaterialProcessingRecord>,
   ): Promise<MaterialProcessingRecord> {
+    currentRunningStage = stage;
     const updated = await updateProcessingStage(materialId, stage, details, repos);
     onProgress?.(updated);
     return updated;
@@ -112,73 +111,90 @@ export async function processMaterialLifecycle(
       return { success: false, materialId, record: rec };
     }
 
-    // Check existing processing record for resume
+    // Check existing processing record and saved data for resume
     let procRecord = await repos.processing.get(materialId);
-
-    // --- STAGE 1: SELECTED ---
-    if (!procRecord || procRecord.stage === 'SELECTED') {
-      procRecord = await notifyStage('SELECTED', {
-        progressPercent: 5,
-        message: `Selected file "${file.name}"`,
-        fileHash,
-      });
-    }
-
-    // --- STAGE 2: VALIDATED ---
-    const headerSample = uint8.slice(0, Math.min(uint8.length, 8192));
-    const validation = validateUploadFile(file.name, file.size, file.type, headerSample);
-    if (!validation.valid) {
-      const rec = await notifyStage('FAILED', {
-        progressPercent: 0,
-        failedStage: 'VALIDATED',
-        errorCode: validation.code ?? 'INVALID_FILE',
-        errorMessage: validation.error ?? 'File validation failed.',
-        retryable: false,
-      });
-      return { success: false, materialId, record: rec, error: validation.error };
-    }
-
-    procRecord = await notifyStage('VALIDATED', {
-      progressPercent: 15,
-      message: `Validated "${file.name}" (${(file.size / 1024).toFixed(1)} KB)`,
-    });
-
-    if (signal?.aborted) {
-      const rec = await notifyStage('CANCELLED', { message: 'Cancelled after validation.' });
-      return { success: false, materialId, record: rec };
-    }
-
-    // --- STAGE 3: EXTRACTED ---
-    const extracted = await extractDocumentText(
-      uint8,
-      validation.fileType!,
-      file.name,
-      undefined,
-      signal,
-    );
-
-    const normalized = normalizeDocument(extracted);
-    const contentHash = await computeContentHash(normalized.text);
-
-    procRecord = await notifyStage('EXTRACTED', {
-      progressPercent: 35,
-      message: `Extracted ${normalized.text.length} characters of study material.`,
-      contentHash,
-      contentVersion: contentHash,
-    });
-
-    // --- STAGE 4: PREVIEWED ---
-    procRecord = await notifyStage('PREVIEWED', {
-      progressPercent: 45,
-      message: 'Document structure previewed and confirmed.',
-    });
-
-    // --- STAGE 5: SAVED ---
-    // Chunking and saving happens atomically. Source text is committed before LLM analysis.
     const existingDoc = await repos.documents.get(materialId);
-    let chunks: DocumentChunkRecord[] = [];
+    const existingChunks = await repos.chunks.listByMaterial(materialId);
 
-    if (!existingDoc || procRecord.stage === 'SAVED' || procRecord.stage === 'PREVIEWED') {
+    let chunks: DocumentChunkRecord[] = [];
+    let contentHash = existingDoc?.contentHash ?? '';
+    let extractedHeadings: string[] | undefined = (existingDoc?.metadata?.headings as string[] | undefined) ?? [];
+
+    if (existingDoc && existingChunks.length > 0) {
+      // Document is already validated, extracted, and chunked! Skip stages 1-5 to resume directly
+      chunks = existingChunks;
+      if (procRecord) {
+        currentRunningStage = procRecord.stage;
+      }
+    } else {
+      // Read ArrayBuffer and maintain a clean clone so pdfjs-dist's Web Worker
+      // cannot detach/neuter the buffer used for Blob storage and hashes
+      const rawBuffer = await file.arrayBuffer();
+      const buffer = rawBuffer.slice(0);
+      const uint8 = new Uint8Array(buffer);
+      const fileHash = await computeFileHash(uint8);
+
+      // --- STAGE 1: SELECTED ---
+      if (!procRecord || procRecord.stage === 'SELECTED') {
+        procRecord = await notifyStage('SELECTED', {
+          progressPercent: 5,
+          message: `Selected file "${file.name}"`,
+          fileHash,
+        });
+      }
+
+      // --- STAGE 2: VALIDATED ---
+      const headerSample = uint8.slice(0, Math.min(uint8.length, 8192));
+      const validation = validateUploadFile(file.name, file.size, file.type, headerSample);
+      if (!validation.valid) {
+        const rec = await notifyStage('FAILED', {
+          progressPercent: 0,
+          failedStage: 'VALIDATED',
+          errorCode: validation.code ?? 'INVALID_FILE',
+          errorMessage: validation.error ?? 'File validation failed.',
+          retryable: false,
+        });
+        return { success: false, materialId, record: rec, error: validation.error };
+      }
+
+      procRecord = await notifyStage('VALIDATED', {
+        progressPercent: 15,
+        message: `Validated "${file.name}" (${(file.size / 1024).toFixed(1)} KB)`,
+      });
+
+      if (signal?.aborted) {
+        const rec = await notifyStage('CANCELLED', { message: 'Cancelled after validation.' });
+        return { success: false, materialId, record: rec };
+      }
+
+      // --- STAGE 3: EXTRACTED ---
+      // Pass a clone to extractDocumentText so the original buffer remains intact for Blob storage
+      const extracted = await extractDocumentText(
+        new Uint8Array(buffer.slice(0)),
+        validation.fileType!,
+        file.name,
+        undefined,
+        signal,
+      );
+
+      const normalized = normalizeDocument(extracted);
+      contentHash = await computeContentHash(normalized.text);
+      extractedHeadings = extracted.headings;
+
+      procRecord = await notifyStage('EXTRACTED', {
+        progressPercent: 35,
+        message: `Extracted ${normalized.text.length} characters of study material.`,
+        contentHash,
+        contentVersion: contentHash,
+      });
+
+      // --- STAGE 4: PREVIEWED ---
+      procRecord = await notifyStage('PREVIEWED', {
+        progressPercent: 45,
+        message: 'Document structure previewed and confirmed.',
+      });
+
+      // --- STAGE 5: SAVED ---
       chunks = await chunkDocument(normalized, materialId, chunkOptions);
 
       const now = nowISO();
@@ -202,6 +218,7 @@ export async function processMaterialLifecycle(
           rawCharCount: extracted.rawText.length,
           normalizedCharCount: normalized.normalizedCharCount,
           chunkCount: chunks.length,
+          headings: extracted.headings ?? [],
           ...extracted.metadata,
         },
         createdAt: existingDoc?.createdAt ?? now,
@@ -214,15 +231,15 @@ export async function processMaterialLifecycle(
         ch.contentVersion = contentHash;
       }
 
-      // Check blob storage cap (10 MiB)
+      // Check blob storage cap (10 MiB) - ensure fresh clone so buffer is not neutered
       const blobDecision = evaluateBlobStorage(file.size);
-      if (blobDecision.storeBlob) {
+      if (blobDecision.storeBlob && buffer.byteLength > 0) {
         const fileRecord: MaterialFileRecord = {
           id: materialId,
           filename: file.name,
           mimeType: file.type || validation.mimeType || 'application/octet-stream',
           size: file.size,
-          blob: new Blob([buffer], { type: file.type || validation.mimeType }),
+          blob: new Blob([buffer.slice(0)], { type: file.type || validation.mimeType }),
           createdAt: now,
         };
         await repos.materialFiles.put(fileRecord);
@@ -240,8 +257,6 @@ export async function processMaterialLifecycle(
           totalUnits: 0,
         },
       });
-    } else {
-      chunks = await repos.chunks.listByMaterial(materialId);
     }
 
     if (signal?.aborted) {
@@ -249,10 +264,15 @@ export async function processMaterialLifecycle(
       return { success: false, materialId, record: rec };
     }
 
-    // --- STAGE 6: ANALYZING (Checkpoint & Resume) ---
+    // --- STAGE 6: ANALYZING (Checkpoint & Resume with 5 RPM Rate-Limit Throttling) ---
+    currentRunningStage = 'ANALYZING';
     const batches = partitionChunksIntoBatches(chunks);
-    const analyzedIndices = new Set<number>(procRecord.analyzedBatchIndices ?? []);
-    const accumulated = [...((procRecord.accumulatedConcepts as unknown as ExtractedConceptDto[]) ?? [])];
+    const analyzedIndices = new Set<number>(procRecord?.analyzedBatchIndices ?? []);
+    const accumulated = [...((procRecord?.accumulatedConcepts as unknown as ExtractedConceptDto[]) ?? [])];
+
+    const defaultThrottleMs = process.env.NODE_ENV === 'test' ? 10 : 12000;
+    const throttleMs = throttleDelayMs ?? defaultThrottleMs;
+    let newlyAnalyzedInThisRun = 0;
 
     for (let i = 0; i < batches.length; i++) {
       if (analyzedIndices.has(i)) {
@@ -275,9 +295,30 @@ export async function processMaterialLifecycle(
       const batchNum = i + 1;
       const progressPercent = Math.min(85, Math.floor(60 + (i / batches.length) * 25));
 
+      // Throttling: if we've already dispatched a batch in this session, pause before the next batch to respect Gemini 5 RPM limit
+      if (newlyAnalyzedInThisRun > 0 && throttleMs > 0) {
+        const totalWaitSec = Math.ceil(throttleMs / 1000);
+        for (let sec = totalWaitSec; sec > 0; sec--) {
+          if (signal?.aborted) {
+            const rec = await notifyStage('CANCELLED', { message: 'Cancelled during rate limit pacing.' });
+            return { success: false, materialId, record: rec };
+          }
+          await notifyStage('ANALYZING', {
+            progressPercent,
+            message: `Pacing requests to respect Gemini API limits (waiting ${sec}s before batch ${batchNum} of ${batches.length})...`,
+            currentBatch: batchNum,
+            totalBatches: batches.length,
+            analyzedBatchIndices: Array.from(analyzedIndices),
+            accumulatedConcepts: accumulated as unknown as Array<Record<string, unknown>>,
+          });
+          const sleepStep = Math.min(1000, throttleMs);
+          await new Promise((resolve) => setTimeout(resolve, sleepStep));
+        }
+      }
+
       await notifyStage('ANALYZING', {
         progressPercent,
-        message: `Analyzing batch ${batchNum} of ${batches.length} notes...`,
+        message: `Extracting concepts from batch ${batchNum} of ${batches.length}...`,
         currentBatch: batchNum,
         totalBatches: batches.length,
         analyzedBatchIndices: Array.from(analyzedIndices),
@@ -294,6 +335,7 @@ export async function processMaterialLifecycle(
 
       accumulated.push(...response.concepts);
       analyzedIndices.add(i);
+      newlyAnalyzedInThisRun++;
 
       // Checkpoint progress after each batch commits
       await updateProcessingStage(
@@ -312,6 +354,7 @@ export async function processMaterialLifecycle(
     }
 
     // --- STAGE 7: UNITS_BUILT ---
+    currentRunningStage = 'UNITS_BUILT';
     await notifyStage('UNITS_BUILT', {
       progressPercent: 90,
       message: 'Synthesizing concepts and constructing learning units...',
@@ -378,7 +421,7 @@ export async function processMaterialLifecycle(
       concepts: orderedConcepts,
       dependencies: finalDependencies,
       chunks,
-      headings: extracted.headings,
+      headings: extractedHeadings ?? (existingDoc?.metadata?.headings as string[] | undefined),
       docTitle: file.name,
     });
 
@@ -421,10 +464,15 @@ export async function processMaterialLifecycle(
   } catch (err) {
     const errorMsg = err instanceof Error ? err.message : String(err);
     // Sanitize error message to ensure no note content is leaked
-    const safeError = errorMsg.replace(/["'].*?["']/g, '"[content]"');
+    let safeError = errorMsg.replace(/["'].*?["']/g, '"[content]"');
+    if (errorMsg.includes('rate limit') || errorMsg.includes('429') || errorMsg.includes('RESOURCE_EXHAUSTED')) {
+      if (!safeError.includes('[content]')) {
+        safeError = `${safeError} (Gemini Free Tier limit is 5 RPM. Click Resume to continue.)`;
+      }
+    }
 
     const failedRecord = await notifyStage('FAILED', {
-      failedStage: 'ANALYZING',
+      failedStage: currentRunningStage,
       errorCode: 'ANALYSIS_ERROR',
       errorMessage: safeError,
       retryable: true,
@@ -449,6 +497,7 @@ export async function resumeMaterialAnalysis(
     signal?: AbortSignal;
     onProgress?: (record: MaterialProcessingRecord) => void;
     customRepos?: StorageRepositories;
+    throttleDelayMs?: number;
   } = {},
 ): Promise<{ success: boolean; materialId: string; record: MaterialProcessingRecord; error?: string }> {
   const repos = options.customRepos ?? getStorage();
@@ -472,15 +521,38 @@ export async function resumeMaterialAnalysis(
     };
   }
 
-  // Check if a stored file blob exists
+  // If study chunks are already saved in IndexedDB, resume directly into Stage 6 (ANALYZING)
+  // without re-opening or re-parsing the original raw PDF file
+  const chunks = await repos.chunks.listByMaterial(materialId);
+  if (chunks.length > 0) {
+    const encoder = new TextEncoder();
+    const textBytes = encoder.encode(doc.extractedText);
+    return processMaterialLifecycle({
+      file: {
+        name: doc.filename,
+        size: doc.fileSize,
+        type: doc.fileType === 'pdf' ? 'application/pdf' : 'text/plain',
+        arrayBuffer: async () =>
+          textBytes.buffer.slice(textBytes.byteOffset, textBytes.byteOffset + textBytes.byteLength),
+      },
+      materialId,
+      subjectId: doc.subjectId,
+      signal: options.signal,
+      onProgress: options.onProgress,
+      customRepos: repos,
+      throttleDelayMs: options.throttleDelayMs,
+    });
+  }
+
+  // If no chunks exist yet, check if a valid stored file blob exists
   const fileRecord = await repos.materialFiles.get(materialId);
-  if (fileRecord && fileRecord.blob) {
+  if (fileRecord && fileRecord.blob && fileRecord.blob.size > 0) {
     const blob = fileRecord.blob;
     return processMaterialLifecycle({
       file: {
         name: fileRecord.filename || doc.filename,
         size: fileRecord.size || doc.fileSize,
-        type: fileRecord.mimeType || doc.fileType,
+        type: fileRecord.mimeType || (doc.fileType === 'pdf' ? 'application/pdf' : 'text/plain'),
         arrayBuffer: () => blob.arrayBuffer(),
       },
       materialId,
@@ -488,15 +560,16 @@ export async function resumeMaterialAnalysis(
       signal: options.signal,
       onProgress: options.onProgress,
       customRepos: repos,
+      throttleDelayMs: options.throttleDelayMs,
     });
   }
 
-  // If no blob exists (e.g. over 10 MiB), create synthetic text file from doc.extractedText
+  // Fallback: create synthetic text file from doc.extractedText using plain text extension
   const encoder = new TextEncoder();
   const textBytes = encoder.encode(doc.extractedText);
   return processMaterialLifecycle({
     file: {
-      name: doc.filename,
+      name: `${doc.filename}.txt`,
       size: textBytes.byteLength,
       type: 'text/plain',
       arrayBuffer: async () =>
@@ -507,6 +580,7 @@ export async function resumeMaterialAnalysis(
     signal: options.signal,
     onProgress: options.onProgress,
     customRepos: repos,
+    throttleDelayMs: options.throttleDelayMs,
   });
 }
 

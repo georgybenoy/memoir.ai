@@ -14,6 +14,7 @@ import {
   Loader2,
   CheckSquare,
   Square,
+  Circle,
   CheckCircle2,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
@@ -171,6 +172,16 @@ export function Step2OrganiseMaterial({ materialId, className }: Step2OrganiseMa
   const handleRetryProcessing = async () => {
     setIsRetrying(true);
     setRetryError(null);
+    setProcessing((prev) =>
+      prev
+        ? {
+            ...prev,
+            stage: 'ANALYZING',
+            message: 'Resuming AI concept extraction...',
+            errorMessage: undefined,
+          }
+        : null
+    );
     try {
       const repos = getStorage();
       const res = await resumeMaterialAnalysis(materialId, {
@@ -182,6 +193,7 @@ export function Step2OrganiseMaterial({ materialId, className }: Step2OrganiseMa
         await loadData();
       } else {
         setRetryError(res.error ?? 'Retry failed.');
+        setProcessing(res.record);
       }
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
@@ -197,7 +209,7 @@ export function Step2OrganiseMaterial({ materialId, className }: Step2OrganiseMa
   };
 
   const isComplete = processing?.stage === 'COMPLETE' || doc?.analysisStatus === 'completed';
-  const isFailed = processing?.stage === 'FAILED';
+  const isFailed = processing?.stage === 'FAILED' && !isRetrying;
   const hasValidSelection =
     selectionKind === 'WHOLE_MATERIAL' || (selectionKind === 'UNITS' && selectedUnitIds.size > 0);
 
@@ -262,8 +274,11 @@ export function Step2OrganiseMaterial({ materialId, className }: Step2OrganiseMa
               )}
               <span>{isFailed ? 'Processing Incomplete' : 'Analyzing Study Material'}</span>
             </CardTitle>
-            <CardDescription className="text-sm text-[var(--text-secondary)]">
-              {processing?.message ?? 'Extracting key concepts, dependencies, and learning units.'}
+            <CardDescription className="text-sm text-[var(--text-secondary)] flex items-center gap-2">
+              {!isFailed && (
+                <Loader2 className="h-3.5 w-3.5 animate-spin text-[var(--primary)] shrink-0" aria-hidden="true" />
+              )}
+              <span>{processing?.message ?? 'Extracting key concepts, dependencies, and learning units.'}</span>
             </CardDescription>
           </CardHeader>
 
@@ -302,7 +317,10 @@ export function Step2OrganiseMaterial({ materialId, className }: Step2OrganiseMa
                 return (
                   <div
                     key={stageItem.id}
-                    className="flex items-center justify-between text-xs py-1.5 border-b border-[var(--border-color)]/30 last:border-0"
+                    className={cn(
+                      'flex items-center justify-between text-xs py-1.5 border-b border-[var(--border-color)]/30 last:border-0 transition-colors',
+                      state === 'active' && 'bg-[var(--primary)]/5 rounded px-2 -mx-1'
+                    )}
                   >
                     <div className="flex items-center gap-2">
                       {state === 'done' && (
@@ -315,7 +333,7 @@ export function Step2OrganiseMaterial({ materialId, className }: Step2OrganiseMa
                         <AlertCircle className="h-4 w-4 text-[var(--danger)] shrink-0" aria-hidden="true" />
                       )}
                       {state === 'waiting' && (
-                        <Square className="h-4 w-4 text-[var(--text-muted)] opacity-40 shrink-0" aria-hidden="true" />
+                        <Circle className="h-4 w-4 text-[var(--text-muted)] opacity-40 shrink-0" aria-hidden="true" />
                       )}
                       <span
                         className={cn(
@@ -327,14 +345,17 @@ export function Step2OrganiseMaterial({ materialId, className }: Step2OrganiseMa
                     </div>
                     <span
                       className={cn(
-                        'capitalize text-[11px] font-mono px-2 py-0.5 rounded',
+                        'capitalize text-[11px] font-mono px-2 py-0.5 rounded flex items-center gap-1.5',
                         state === 'done' && 'text-[var(--accent-green)] bg-[var(--accent-green)]/10',
                         state === 'active' && 'text-[var(--accent-cyan)] bg-[var(--accent-cyan)]/10',
                         state === 'failed' && 'text-[var(--danger)] bg-[var(--danger)]/10',
                         state === 'waiting' && 'text-[var(--text-muted)]'
                       )}
                     >
-                      {state}
+                      {state === 'active' && (
+                        <Loader2 className="h-3 w-3 animate-spin text-[var(--accent-cyan)] shrink-0" aria-hidden="true" />
+                      )}
+                      <span>{state}</span>
                     </span>
                   </div>
                 );
@@ -345,10 +366,13 @@ export function Step2OrganiseMaterial({ materialId, className }: Step2OrganiseMa
             {processing?.currentBatch && processing?.totalBatches ? (
               <div className="space-y-2 pt-1">
                 <div className="flex justify-between text-xs text-[var(--text-muted)] font-medium">
-                  <span>
-                    Batch {processing.currentBatch} of {processing.totalBatches}
+                  <span className="flex items-center gap-1.5">
+                    {!isFailed && <Loader2 className="h-3 w-3 animate-spin text-[var(--primary)] shrink-0" aria-hidden="true" />}
+                    <span>
+                      Batch {processing.currentBatch} of {processing.totalBatches}
+                    </span>
                   </span>
-                  <span>{Math.round((processing.currentBatch / processing.totalBatches) * 100)}%</span>
+                  <span className="font-mono">{Math.round((processing.currentBatch / processing.totalBatches) * 100)}%</span>
                 </div>
                 <div
                   role="progressbar"
@@ -356,14 +380,18 @@ export function Step2OrganiseMaterial({ materialId, className }: Step2OrganiseMa
                   aria-valuenow={processing.currentBatch}
                   aria-valuemin={0}
                   aria-valuemax={processing.totalBatches}
-                  className="h-2 w-full rounded-full bg-[var(--surface-raised)] overflow-hidden"
+                  className="h-2 w-full rounded-full bg-[var(--surface-raised)] overflow-hidden relative"
                 >
                   <div
-                    className="h-full bg-[var(--primary)] transition-all duration-300"
+                    className="h-full bg-[var(--primary)] transition-all duration-300 relative overflow-hidden"
                     style={{
                       width: `${Math.min(100, Math.round((processing.currentBatch / processing.totalBatches) * 100))}%`,
                     }}
-                  />
+                  >
+                    {!isFailed && (
+                      <span className="absolute inset-0 bg-white/20 animate-pulse" />
+                    )}
+                  </div>
                 </div>
               </div>
             ) : null}
