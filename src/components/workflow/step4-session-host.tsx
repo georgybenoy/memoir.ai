@@ -286,7 +286,7 @@ export function Step4SessionHost({
   const combinedError = machineError || teachingError;
 
   return (
-    <div className={cn('space-y-6 max-w-7xl mx-auto py-4 sm:py-6 px-3 sm:px-6', className)}>
+    <div className={cn('space-y-6 max-w-7xl mx-auto py-4 sm:py-6 px-3 sm:px-6 pb-24 sm:pb-32', className)}>
       {/* 1. Compact Session Header (Replaces old 'Active Learning Session' card) */}
       <SessionHeader
         materialName={document?.filename}

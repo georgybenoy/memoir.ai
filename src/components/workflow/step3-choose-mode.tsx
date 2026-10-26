@@ -215,7 +215,7 @@ export function Step3ChooseMode({ materialId, className }: Step3ChooseModeProps)
       : concepts.length;
 
   return (
-    <div className={cn('space-y-8 max-w-5xl mx-auto py-4 sm:py-6', className)}>
+    <div className={cn('space-y-8 max-w-5xl mx-auto py-4 sm:py-6 pb-24 sm:pb-32', className)}>
       {/* Step Heading */}
       <div className="space-y-1">
         <h1

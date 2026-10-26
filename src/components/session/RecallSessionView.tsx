@@ -59,44 +59,14 @@ export function RecallSessionView({
   onSelectConcept,
   className,
 }: RecallSessionViewProps) {
-  // 1. In-Flight Question Generation State (Prioritized during generation so user sees active progress)
-  if (
-    machineState === 'GENERATING_QUESTION' ||
-    (isLoading && !currentQuestion && machineState !== 'FEEDBACK' && machineState !== 'REVISION_DUE')
-  ) {
-    return (
-      <div className={cn('space-y-6', className)}>
-        <Card className="border-[var(--border-color)] bg-[var(--surface)] p-8 rounded-2xl shadow-xs text-center" role="status" aria-live="polite">
-          <CardContent className="space-y-5 pt-4 max-w-md mx-auto">
-            <div className="relative mx-auto w-16 h-16 flex items-center justify-center">
-              <div className="absolute inset-0 rounded-full bg-[var(--accent-cyan)]/25 animate-ping" />
-              <div className="relative p-3.5 rounded-full bg-[var(--accent-cyan)]/10 text-[var(--accent-cyan)] border border-[var(--accent-cyan)]/30">
-                <Loader2 className="h-8 w-8 animate-spin" aria-hidden="true" />
-              </div>
-            </div>
-            <div className="space-y-2">
-              <h2 className="text-base sm:text-lg font-semibold text-[var(--text-primary)]">
-                Generating Practice Question…
-              </h2>
-              <p className="text-xs text-[var(--text-muted)] leading-relaxed">
-                Calibrating grounded prompt and synthesizing key mechanism points from your study notes at your adaptive difficulty level.
-              </p>
-            </div>
-            <div className="inline-flex items-center justify-center gap-2 px-3 py-1.5 rounded-full bg-[var(--accent-cyan)]/10 border border-[var(--accent-cyan)]/20 text-xs text-[var(--accent-cyan)] font-mono">
-              <span className="w-2 h-2 rounded-full bg-[var(--accent-cyan)] animate-pulse" />
-              <span>Analyzing concept relationships</span>
-            </div>
-          </CardContent>
-        </Card>
-      </div>
-    );
-  }
-
-  // 2. Ready for Question / Waiting for Recall State
+  // 1. Ready for Question / Waiting for Recall State
   if (
     machineState === 'WAITING_FOR_RECALL' ||
+    machineState === 'GENERATING_QUESTION' ||
     (!currentQuestion && machineState !== 'FEEDBACK' && machineState !== 'REVISION_DUE')
   ) {
+    const isGenerating = isLoading || machineState === 'GENERATING_QUESTION';
+
     return (
       <div className={cn('space-y-6', className)}>
         <Card className="border-[var(--border-color)] bg-[var(--surface)] p-6 sm:p-8 rounded-2xl shadow-xs text-center">
@@ -124,8 +94,8 @@ export function RecallSessionView({
               <Button
                 variant="primary"
                 onClick={onRequestQuestion}
-                disabled={isLoading}
-                isLoading={isLoading}
+                disabled={isGenerating}
+                isLoading={isGenerating}
                 loadingText="Generating Practice Question…"
                 className="min-h-[44px] px-6 text-xs sm:text-sm font-semibold bg-[var(--primary)] text-white hover:bg-[var(--primary)]/90"
                 aria-label="Generate Practice Question: Grounded active recall"

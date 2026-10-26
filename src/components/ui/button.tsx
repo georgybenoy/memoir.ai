@@ -69,11 +69,8 @@ export const Button = React.forwardRef<HTMLButtonElement, ButtonProps>(
       >
         {isLoading ? (
           <>
-            <Loader2 className="h-4 w-4 animate-spin shrink-0 text-current inline-block" aria-hidden="true" />
-            <span className="inline-flex items-center gap-1">
-              <span>{loadingText ?? children}</span>
-              <span className="inline-flex tracking-widest animate-pulse font-bold" aria-hidden="true">…</span>
-            </span>
+            <Loader2 className="h-4 w-4 animate-spin shrink-0" aria-hidden="true" />
+            <span>{loadingText ?? children}</span>
           </>
         ) : (
           children

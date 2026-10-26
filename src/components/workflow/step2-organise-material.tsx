@@ -223,7 +223,7 @@ export function Step2OrganiseMaterial({ materialId, className }: Step2OrganiseMa
   }, [concepts]);
 
   return (
-    <div className={cn('space-y-6 max-w-4xl mx-auto py-4 sm:py-6', className)}>
+    <div className={cn('space-y-6 max-w-4xl mx-auto py-4 sm:py-6 pb-24 sm:pb-32', className)}>
       {/* Step Heading */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
         <div className="space-y-1">

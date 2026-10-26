@@ -266,7 +266,7 @@ export function Step1AddMaterial({ onMaterialSelected, className }: Step1AddMate
   };
 
   return (
-    <div className={cn('space-y-8 max-w-4xl mx-auto py-4 sm:py-6', className)}>
+    <div className={cn('space-y-8 max-w-4xl mx-auto py-4 sm:py-6 pb-24 sm:pb-32', className)}>
       {/* Step Heading */}
       <div className="space-y-1">
         <h1
@@ -406,11 +406,8 @@ export function Step1AddMaterial({ onMaterialSelected, className }: Step1AddMate
                 role="status"
                 aria-live="polite"
               >
-                <div className="relative">
-                  <div className="absolute inset-0 rounded-full bg-[var(--primary)]/25 animate-ping" />
-                  <div className="relative p-3 rounded-full bg-[var(--primary)]/10 text-[var(--primary)] border border-[var(--primary)]/30">
-                    <Loader2 className="h-6 w-6 animate-spin" aria-label="Extracting text from file" />
-                  </div>
+                <div className="p-4 rounded-full bg-[var(--primary)]/10 text-[var(--primary)] border border-[var(--primary)]/25">
+                  <Loader2 className="h-6 w-6 animate-spin" aria-label="Extracting text from file" />
                 </div>
                 <div className="text-center space-y-1">
                   <p className="text-sm font-semibold text-[var(--text-primary)]">

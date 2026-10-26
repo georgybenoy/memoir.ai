@@ -145,40 +145,7 @@ export function RevisionSessionView({
     );
   }
 
-  // 2. In-Flight Review Item Preparation State
-  if (
-    machineState === 'GENERATING_QUESTION' ||
-    (isLoading && !currentQuestion && dueCount > 0)
-  ) {
-    return (
-      <div className={cn('space-y-6', className)}>
-        <Card className="border-[var(--border-color)] bg-[var(--surface)] p-8 rounded-2xl shadow-xs text-center" role="status" aria-live="polite">
-          <CardContent className="space-y-5 pt-4 max-w-md mx-auto">
-            <div className="relative mx-auto w-16 h-16 flex items-center justify-center">
-              <div className="absolute inset-0 rounded-full bg-[var(--warning)]/25 animate-ping" />
-              <div className="relative p-3.5 rounded-full bg-[var(--warning)]/10 text-[var(--warning)] border border-[var(--warning)]/30">
-                <Loader2 className="h-8 w-8 animate-spin" aria-hidden="true" />
-              </div>
-            </div>
-            <div className="space-y-2">
-              <h2 className="text-base sm:text-lg font-semibold text-[var(--text-primary)]">
-                Preparing Retention Review Item…
-              </h2>
-              <p className="text-xs text-[var(--text-muted)] leading-relaxed">
-                Loading retention reinforcement prompt for {concept?.title || 'this concept'} based on your SM-2 schedule.
-              </p>
-            </div>
-            <div className="inline-flex items-center justify-center gap-2 px-3 py-1.5 rounded-full bg-[var(--warning)]/10 border border-[var(--warning)]/20 text-xs text-[var(--warning)] font-mono">
-              <span className="w-2 h-2 rounded-full bg-[var(--warning)] animate-pulse" />
-              <span>Retrieving flashcard & prompt context</span>
-            </div>
-          </CardContent>
-        </Card>
-      </div>
-    );
-  }
-
-  // 3. Active Review Question Prompt State
+  // 2. Active Review Question Prompt State
   if (
     currentQuestion &&
     (machineState === 'WAITING_FOR_ANSWER' || machineState === 'EVALUATING')
@@ -278,8 +245,8 @@ export function RevisionSessionView({
             <Button
               variant="primary"
               onClick={onRequestQuestion}
-              disabled={isLoading}
-              isLoading={isLoading}
+              disabled={isLoading || machineState === 'GENERATING_QUESTION'}
+              isLoading={isLoading || machineState === 'GENERATING_QUESTION'}
               loadingText="Loading Review Item…"
               className="min-h-[44px] px-6 text-xs sm:text-sm font-semibold bg-[var(--warning)] text-black hover:bg-[var(--warning)]/90"
             >
