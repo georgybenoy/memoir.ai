@@ -402,12 +402,24 @@ export function Step1AddMaterial({ onMaterialSelected, className }: Step1AddMate
           <CardContent className="space-y-4 pt-0">
             {isExtracting ? (
               <div
-                className="py-8 flex flex-col items-center justify-center gap-2 text-[var(--text-secondary)]"
+                className="py-8 flex flex-col items-center justify-center gap-3 text-[var(--text-secondary)]"
                 role="status"
                 aria-live="polite"
               >
-                <Loader2 className="h-6 w-6 animate-spin text-[var(--primary)]" aria-label="Extracting text from file" />
-                <span className="text-sm">Extracting and normalizing document text...</span>
+                <div className="relative">
+                  <div className="absolute inset-0 rounded-full bg-[var(--primary)]/25 animate-ping" />
+                  <div className="relative p-3 rounded-full bg-[var(--primary)]/10 text-[var(--primary)] border border-[var(--primary)]/30">
+                    <Loader2 className="h-6 w-6 animate-spin" aria-label="Extracting text from file" />
+                  </div>
+                </div>
+                <div className="text-center space-y-1">
+                  <p className="text-sm font-semibold text-[var(--text-primary)]">
+                    Extracting and normalizing document text…
+                  </p>
+                  <p className="text-xs text-[var(--text-muted)]">
+                    Parsing pages, sections, and formulas directly on your device
+                  </p>
+                </div>
               </div>
             ) : extractedPreview ? (
               <div className="space-y-3">
@@ -430,19 +442,12 @@ export function Step1AddMaterial({ onMaterialSelected, className }: Step1AddMate
                     size="lg"
                     onClick={handleConfirmAndProcess}
                     disabled={isSubmitting}
+                    isLoading={isSubmitting}
+                    loadingText="Starting Analysis…"
                     className="w-full sm:w-auto min-h-[44px] bg-[var(--primary)] text-white hover:bg-[var(--primary-hover)] flex items-center justify-center gap-2"
                   >
-                    {isSubmitting ? (
-                      <>
-                        <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" />
-                        <span>Starting Analysis...</span>
-                      </>
-                    ) : (
-                      <>
-                        <span>Confirm and Process</span>
-                        <ArrowRight className="h-4 w-4" aria-hidden="true" />
-                      </>
-                    )}
+                    <span>Confirm and Process</span>
+                    <ArrowRight className="h-4 w-4" aria-hidden="true" />
                   </Button>
                 </div>
               </div>

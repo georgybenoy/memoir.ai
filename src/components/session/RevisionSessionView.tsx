@@ -1,7 +1,7 @@
 'use client';
 
 import * as React from 'react';
-import { Calendar, Brain, BookOpen, Clock, CheckCircle2, ArrowRight } from 'lucide-react';
+import { Calendar, Brain, BookOpen, Clock, CheckCircle2, ArrowRight, Loader2 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
 import { QuestionCard } from '@/components/tutor/QuestionCard';
@@ -145,7 +145,40 @@ export function RevisionSessionView({
     );
   }
 
-  // 2. Active Review Question Prompt State
+  // 2. In-Flight Review Item Preparation State
+  if (
+    machineState === 'GENERATING_QUESTION' ||
+    (isLoading && !currentQuestion && dueCount > 0)
+  ) {
+    return (
+      <div className={cn('space-y-6', className)}>
+        <Card className="border-[var(--border-color)] bg-[var(--surface)] p-8 rounded-2xl shadow-xs text-center" role="status" aria-live="polite">
+          <CardContent className="space-y-5 pt-4 max-w-md mx-auto">
+            <div className="relative mx-auto w-16 h-16 flex items-center justify-center">
+              <div className="absolute inset-0 rounded-full bg-[var(--warning)]/25 animate-ping" />
+              <div className="relative p-3.5 rounded-full bg-[var(--warning)]/10 text-[var(--warning)] border border-[var(--warning)]/30">
+                <Loader2 className="h-8 w-8 animate-spin" aria-hidden="true" />
+              </div>
+            </div>
+            <div className="space-y-2">
+              <h2 className="text-base sm:text-lg font-semibold text-[var(--text-primary)]">
+                Preparing Retention Review Item…
+              </h2>
+              <p className="text-xs text-[var(--text-muted)] leading-relaxed">
+                Loading retention reinforcement prompt for {concept?.title || 'this concept'} based on your SM-2 schedule.
+              </p>
+            </div>
+            <div className="inline-flex items-center justify-center gap-2 px-3 py-1.5 rounded-full bg-[var(--warning)]/10 border border-[var(--warning)]/20 text-xs text-[var(--warning)] font-mono">
+              <span className="w-2 h-2 rounded-full bg-[var(--warning)] animate-pulse" />
+              <span>Retrieving flashcard & prompt context</span>
+            </div>
+          </CardContent>
+        </Card>
+      </div>
+    );
+  }
+
+  // 3. Active Review Question Prompt State
   if (
     currentQuestion &&
     (machineState === 'WAITING_FOR_ANSWER' || machineState === 'EVALUATING')
@@ -170,7 +203,7 @@ export function RevisionSessionView({
             onAnswerChange={onAnswerChange}
             onConfidenceChange={onConfidenceChange}
             onSubmit={onSubmitAnswer}
-            isLoading={isLoading}
+            isLoading={isLoading || machineState === 'EVALUATING'}
             isFallback={isFallbackQuestion}
             onTryAnotherQuestion={onRequestQuestion}
           />

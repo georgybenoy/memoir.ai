@@ -6,7 +6,7 @@ import { Card, CardHeader, CardTitle, CardContent, CardFooter } from '@/componen
 import { Button } from '@/components/ui/button';
 import { ConfidenceSelector } from './ConfidenceSelector';
 import { SafeMarkdown } from './SafeMarkdown';
-import { HelpCircle, Send, AlertTriangle, ShieldCheck } from 'lucide-react';
+import { HelpCircle, Send, AlertTriangle, ShieldCheck, Loader2 } from 'lucide-react';
 import { cn } from '@/lib/utils/cn';
 
 export interface QuestionCardProps {
@@ -133,6 +133,25 @@ export const QuestionCard: React.FC<QuestionCardProps> = ({
           onChange={onConfidenceChange}
           disabled={isLoading}
         />
+
+        {/* In-Flight Evaluation Progress Indicator */}
+        {isLoading && (
+          <div
+            role="status"
+            aria-live="polite"
+            className="p-3.5 rounded-xl border border-[var(--primary)]/30 bg-[var(--primary)]/10 flex items-center gap-3 text-xs text-[var(--text-primary)] animate-pulse"
+          >
+            <Loader2 className="h-5 w-5 animate-spin text-[var(--primary)] shrink-0" aria-hidden="true" />
+            <div className="space-y-0.5 flex-1">
+              <p className="font-semibold text-[var(--primary)]">
+                Evaluating your explanation with rubric…
+              </p>
+              <p className="text-[11px] text-[var(--text-muted)] leading-relaxed">
+                Assessing key mechanism points, identifying coverage, and detecting misconceptions.
+              </p>
+            </div>
+          </div>
+        )}
       </CardContent>
 
       <CardFooter className="pt-2 pb-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-t border-[var(--border-color)]/60">

@@ -59,15 +59,21 @@ export const Button = React.forwardRef<HTMLButtonElement, ButtonProps>(
     return (
       <Comp
         ref={ref}
-        className={cn(buttonVariants({ variant, size, className }))}
+        className={cn(
+          buttonVariants({ variant, size, className }),
+          isLoading && 'opacity-90 cursor-wait pointer-events-none select-none',
+        )}
         disabled={isDisabled}
         aria-busy={isLoading}
         {...props}
       >
         {isLoading ? (
           <>
-            <Loader2 className="h-4 w-4 animate-spin shrink-0" aria-hidden="true" />
-            <span>{loadingText ?? children}</span>
+            <Loader2 className="h-4 w-4 animate-spin shrink-0 text-current inline-block" aria-hidden="true" />
+            <span className="inline-flex items-center gap-1">
+              <span>{loadingText ?? children}</span>
+              <span className="inline-flex tracking-widest animate-pulse font-bold" aria-hidden="true">…</span>
+            </span>
           </>
         ) : (
           children

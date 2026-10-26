@@ -311,7 +311,78 @@ body {
   transition: background-color 250ms ease-out, border-color 250ms ease-out, color 250ms ease-out !important;
 }
 
-/* Reduced motion disables ripple completely */
+/* =========================================================================
+   ANIMATIONS & LOADING PROCESSING SYSTEM
+   Ensure spinners, loaders, and progress indicators continuously animate smoothly
+   so the user receives instant, lively visual feedback and never feels stuck.
+   ========================================================================= */
+
+@keyframes spin {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.animate-spin {
+  animation: spin 0.85s linear infinite !important;
+  transform-origin: center center;
+  display: inline-block;
+}
+
+@keyframes pulse-gentle {
+  0%, 100% {
+    opacity: 1;
+    transform: scale(1);
+  }
+  50% {
+    opacity: 0.55;
+    transform: scale(0.98);
+  }
+}
+
+.animate-pulse {
+  animation: pulse-gentle 2s cubic-bezier(0.4, 0, 0.6, 1) infinite !important;
+}
+
+@keyframes ping-subtle {
+  0% {
+    transform: scale(1);
+    opacity: 0.8;
+  }
+  75%, 100% {
+    transform: scale(1.6);
+    opacity: 0;
+  }
+}
+
+.animate-ping {
+  animation: ping-subtle 1.5s cubic-bezier(0, 0, 0.2, 1) infinite !important;
+}
+
+@keyframes shimmer {
+  0% {
+    background-position: -200% 0;
+  }
+  100% {
+    background-position: 200% 0;
+  }
+}
+
+.animate-shimmer {
+  background: linear-gradient(
+    90deg,
+    rgba(255, 255, 255, 0) 0%,
+    rgba(255, 255, 255, 0.12) 50%,
+    rgba(255, 255, 255, 0) 100%
+  );
+  background-size: 200% 100%;
+  animation: shimmer 1.8s infinite linear;
+}
+
+/* Reduced motion disables large layout motion, but preserves active progress and loading animations */
 @media (prefers-reduced-motion: reduce) {
   *,
   *::before,
@@ -320,6 +391,18 @@ body {
     animation-iteration-count: 1 !important;
     transition-duration: 0.01ms !important;
     scroll-behavior: auto !important;
+  }
+
+  /* CRITICAL: Keep essential progress and loading animations running so user knows the application is actively processing and not frozen/stuck */
+  .animate-spin,
+  .animate-spin *,
+  [aria-busy="true"] svg,
+  [data-loading] svg,
+  .loading-spinner {
+    animation: spin 1.1s linear infinite !important;
+    animation-duration: 1.1s !important;
+    animation-iteration-count: infinite !important;
+    display: inline-block !important;
   }
 
   ::view-transition-new(root) {

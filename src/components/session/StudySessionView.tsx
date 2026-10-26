@@ -234,8 +234,8 @@ export function StudySessionView({
                     </Button>
                   )}
                 </div>
-                <div className="h-3 bg-[var(--surface-raised)] rounded-md w-4/5" />
-                <div className="h-3 bg-[var(--surface-raised)] rounded-md w-3/5" />
+                <div className="h-3 bg-[var(--surface-raised)] rounded-md w-4/5 animate-shimmer" />
+                <div className="h-3 bg-[var(--surface-raised)] rounded-md w-3/5 animate-shimmer" />
               </div>
             </div>
           )}
@@ -314,6 +314,8 @@ export function StudySessionView({
                 variant="primary"
                 size="sm"
                 disabled={!learnerInput.trim() || isLoading}
+                isLoading={isLoading}
+                loadingText="Sending…"
                 className="text-xs min-h-[38px] px-3.5 font-medium ml-auto"
                 aria-label="Send response to AI tutor"
               >

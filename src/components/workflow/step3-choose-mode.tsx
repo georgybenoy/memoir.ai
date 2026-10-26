@@ -300,19 +300,12 @@ export function Step3ChooseMode({ materialId, className }: Step3ChooseModeProps)
                 variant="primary"
                 onClick={() => handleLaunchMode('study')}
                 disabled={launchingMode !== null}
+                isLoading={launchingMode === 'study'}
+                loadingText="Launching Study Mode…"
                 className="w-full min-h-[44px] bg-[var(--primary)] text-white hover:bg-[var(--primary-hover)] flex items-center justify-center gap-2 font-medium"
               >
-                {launchingMode === 'study' ? (
-                  <>
-                    <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" />
-                    <span>Launching...</span>
-                  </>
-                ) : (
-                  <>
-                    <span>Start Socratic Study</span>
-                    <ArrowRight className="h-4 w-4" aria-hidden="true" />
-                  </>
-                )}
+                <span>Start Socratic Study</span>
+                <ArrowRight className="h-4 w-4" aria-hidden="true" />
               </Button>
             </CardFooter>
           </Card>
@@ -359,19 +352,12 @@ export function Step3ChooseMode({ materialId, className }: Step3ChooseModeProps)
                 variant="secondary"
                 onClick={() => handleLaunchMode('recall')}
                 disabled={launchingMode !== null}
+                isLoading={launchingMode === 'recall'}
+                loadingText="Launching Recall Practice…"
                 className="w-full min-h-[44px] border-[var(--border-color)] hover:border-[var(--accent-cyan)] hover:text-[var(--accent-cyan)] flex items-center justify-center gap-2 font-medium"
               >
-                {launchingMode === 'recall' ? (
-                  <>
-                    <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" />
-                    <span>Launching...</span>
-                  </>
-                ) : (
-                  <>
-                    <span>Start Active Recall</span>
-                    <ArrowRight className="h-4 w-4" aria-hidden="true" />
-                  </>
-                )}
+                <span>Start Active Recall</span>
+                <ArrowRight className="h-4 w-4" aria-hidden="true" />
               </Button>
             </CardFooter>
           </Card>
@@ -454,19 +440,12 @@ export function Step3ChooseMode({ materialId, className }: Step3ChooseModeProps)
                   variant="primary"
                   onClick={() => handleLaunchMode('revision')}
                   disabled={launchingMode !== null}
+                  isLoading={launchingMode === 'revision'}
+                  loadingText="Launching Spaced Revision…"
                   className="w-full min-h-[44px] bg-[var(--warning)] text-black hover:bg-[var(--warning)]/90 flex items-center justify-center gap-2 font-semibold"
                 >
-                  {launchingMode === 'revision' ? (
-                    <>
-                      <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" />
-                      <span>Launching...</span>
-                    </>
-                  ) : (
-                    <>
-                      <span>Start Spaced Revision</span>
-                      <ArrowRight className="h-4 w-4" aria-hidden="true" />
-                    </>
-                  )}
+                  <span>Start Spaced Revision</span>
+                  <ArrowRight className="h-4 w-4" aria-hidden="true" />
                 </Button>
               ) : (
                 <div className="w-full py-2.5 px-3 rounded-lg bg-[var(--surface-raised)] border border-[var(--border-color)] text-center text-xs text-[var(--text-muted)] font-medium">
