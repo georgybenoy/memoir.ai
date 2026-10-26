@@ -13,7 +13,7 @@ import {
   executeImport,
   restoreRollbackData,
 } from '@/lib/db/backup';
-import { MAX_BACKUP_SIZE_BYTES, MAX_RECORDS_PER_STORE } from '@/lib/db/schema';
+import { MAX_BACKUP_SIZE_BYTES, MAX_RECORDS_PER_STORE, SCHEMA_VERSION } from '@/lib/db/schema';
 import {
   type DocumentRecord,
   type DocumentChunkRecord,
@@ -225,7 +225,7 @@ describe('Backup Export, Validation, and Import Foundation', () => {
     // 2. Export backup envelope
     const envelope = await createBackupEnvelope(repos);
     expect(envelope.format).toBe('edumentor-backup');
-    expect(envelope.schemaVersion).toBe(1);
+    expect(envelope.schemaVersion).toBe(SCHEMA_VERSION);
     expect(envelope.documents).toHaveLength(1);
     expect(envelope.concepts).toHaveLength(2);
     expect(envelope.preferences.difficulty).toBe('advanced');
@@ -682,6 +682,123 @@ describe('Backup Export, Validation, and Import Foundation', () => {
         (a) => a.id === largeAttempts[39].id,
       );
       expect(reimportedAttempt39).toEqual(largeAttempts[39]);
+    });
+
+    it('imports legacy schemaVersion 1 backup file and synthesizes learningUnits and processing records', async () => {
+      await repos.workspace.getOrCreateDefault();
+
+      // Create a v1-format backup envelope without learningUnits or processing
+      const v1Envelope = {
+        format: 'edumentor-backup' as const,
+        schemaVersion: 1,
+        exportedAt: '2026-05-01T10:00:00.000Z',
+        appVersion: '0.1.0',
+        preferences: {
+          difficulty: 'intermediate' as const,
+          model: 'gemini-3.8-flash' as const,
+          theme: 'dark' as const,
+        },
+        workspace: {
+          id: 'default-workspace',
+          preferences: {
+            difficulty: 'intermediate' as const,
+            model: 'gemini-3.8-flash' as const,
+            theme: 'dark' as const,
+          },
+          stats: {
+            totalStudyTimeMinutes: 120,
+            totalQuestionsAnswered: 15,
+            overallAccuracyPercent: 80,
+            streakDays: 4,
+            lastActiveDate: '2026-05-01',
+          },
+          createdAt: '2026-05-01T10:00:00.000Z',
+          updatedAt: '2026-05-01T10:00:00.000Z',
+        },
+        workspaceStats: {
+          totalStudyTimeMinutes: 120,
+          totalQuestionsAnswered: 15,
+          overallAccuracyPercent: 80,
+          streakDays: 4,
+          lastActiveDate: '2026-05-01',
+        },
+        documents: [
+          {
+            id: 'doc-v1-import',
+            filename: 'Legacy_Algorithms.pdf',
+            fileType: 'pdf' as const,
+            fileSize: 4096,
+            extractedText: 'Divide and conquer algorithms, dynamic programming, greedy strategies.',
+            analysisStatus: 'completed' as const,
+            contentHash: 'hash-v1-algo',
+            createdAt: '2026-05-01T10:00:00.000Z',
+            updatedAt: '2026-05-01T10:00:00.000Z',
+          },
+        ],
+        documentChunks: [
+          {
+            id: 'chunk-v1-1',
+            documentId: 'doc-v1-import',
+            chunkIndex: 0,
+            text: 'Divide and conquer algorithms...',
+            startOffset: 0,
+            endOffset: 30,
+            byteLength: 30,
+            tokenEstimate: 7,
+            createdAt: '2026-05-01T10:00:00.000Z',
+          },
+        ],
+        subjects: [],
+        concepts: [
+          {
+            id: 'con-v1-merge',
+            title: 'Merge Sort',
+            summary: 'Divide-and-conquer sorting algorithm with O(n log n) complexity.',
+            canonicalExplanation: 'Recursively splits and merges arrays.',
+            keyTerms: ['merge', 'recursion', 'divide-and-conquer'],
+            sourceChunkIds: ['chunk-v1-1'],
+            tier: 0 as const,
+            status: 'available' as const,
+            confidence: 0.95,
+            extractionOrder: 0,
+            createdAt: '2026-05-01T10:00:00.000Z',
+            updatedAt: '2026-05-01T10:00:00.000Z',
+          },
+        ],
+        conceptDependencies: [],
+        studySessions: [],
+        studyPathItems: [],
+        recallQuestions: [],
+        recallAttempts: [],
+        masteryStates: [],
+        spacedRepetitionStates: [],
+        conversationMessages: [],
+        learningEvents: [],
+      };
+
+      const result = await executeImport(
+        v1Envelope as unknown as Parameters<typeof executeImport>[0],
+        'replace_all',
+        repos,
+      );
+      expect(result.importedCounts.documents).toBe(1);
+      expect(result.importedCounts.concepts).toBe(1);
+
+      // Verify that learning units were automatically synthesized
+      const units = await repos.learningUnits.listByMaterial('doc-v1-import');
+      expect(units.length).toBe(1);
+      expect(units[0].title).toBe('Legacy_Algorithms.pdf - Core Concepts');
+      expect(units[0].conceptIds).toContain('con-v1-merge');
+
+      // Verify that processing record was automatically synthesized
+      const proc = await repos.processing.getByMaterial('doc-v1-import');
+      expect(proc).toBeDefined();
+      expect(proc?.stage).toBe('COMPLETE');
+
+      // Verify concept was linked to materialId and unitId
+      const concept = await repos.concepts.get('con-v1-merge');
+      expect(concept?.materialId).toBe('doc-v1-import');
+      expect(concept?.unitId).toBe(units[0].id);
     });
   });
 });

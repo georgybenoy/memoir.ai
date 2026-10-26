@@ -1,23 +1,36 @@
 'use client';
 
 import * as React from 'react';
-import { WorkspaceLayout } from '@/components/workspace/layout';
-import { Container } from '@/components/ui/container';
-import { MaterialsView } from '@/components/materials/materials-view';
-import { useWorkspaceStore } from '@/lib/state/workspace-store';
+import { useRouter, useSearchParams } from 'next/navigation';
+import { resolveLegacyRoute } from '@/features/workflow/redirects';
+import { Loader2 } from 'lucide-react';
 
-export default function MaterialsPage() {
-  const setActiveView = useWorkspaceStore((state) => state.setActiveView);
+function LegacyMaterialsRedirectInner() {
+  const router = useRouter();
+  const searchParams = useSearchParams();
 
   React.useEffect(() => {
-    setActiveView('materials');
-  }, [setActiveView]);
+    const target = resolveLegacyRoute('/app/materials', searchParams);
+    router.replace(target);
+  }, [router, searchParams]);
 
   return (
-    <WorkspaceLayout>
-      <Container size="workspace" className="py-2 sm:py-4">
-        <MaterialsView />
-      </Container>
-    </WorkspaceLayout>
+    <div className="min-h-screen flex items-center justify-center bg-[var(--background)]">
+      <Loader2 className="h-8 w-8 animate-spin text-[var(--primary)]" aria-label="Redirecting to learning workflow" />
+    </div>
+  );
+}
+
+export default function LegacyMaterialsPage() {
+  return (
+    <React.Suspense
+      fallback={
+        <div className="min-h-screen flex items-center justify-center bg-[var(--background)]">
+          <Loader2 className="h-8 w-8 animate-spin text-[var(--primary)]" aria-label="Loading..." />
+        </div>
+      }
+    >
+      <LegacyMaterialsRedirectInner />
+    </React.Suspense>
   );
 }

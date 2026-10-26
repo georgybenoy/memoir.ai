@@ -38,23 +38,40 @@ import {
 } from '@/lib/config/ingestion';
 import {
   ingestDocument,
-  deleteDocumentAndChunks,
   verifyChunkProvenance,
   getChunkExcerpt,
   type IngestionProgress,
   type IngestResult,
 } from '@/features/ingestion';
 import {
+  evaluateDuplicateDecision,
+  inFlightDeduplicator,
+  computeFileHash,
+  type DuplicateDecision,
+} from '@/features/ingestion/duplicates';
+import {
   extractConceptsForDocument,
   type ConceptPipelineProgress,
 } from '@/features/concepts';
+import { buildLearningUnits } from '@/features/learning-units/builder';
+import { persistLearningUnits } from '@/features/learning-units/service';
+import {
+  getDeleteMaterialCascadeSummary,
+  executeDeleteMaterialCascade,
+  planReplaceMaterialConcepts,
+  type DeleteMaterialCascadeSummary,
+} from '@/features/learning-units/reprocess-replace';
 import { getStorage } from '@/lib/db/bootstrap';
+import { nowISO } from '@/lib/utils/clock';
 import {
   type DocumentRecord,
   type DocumentChunkRecord,
   type ConceptRecord,
+  type LearningUnitRecord,
+  type MaterialProcessingRecord,
 } from '@/types/domain';
 import { cn } from '@/lib/utils/cn';
+import { Layers, RotateCw, RefreshCw } from 'lucide-react';
 
 export function MaterialsView() {
   const { setActiveView, addToast } = useWorkspaceStore();
@@ -64,8 +81,18 @@ export function MaterialsView() {
   const [loadingDocs, setLoadingDocs] = React.useState(true);
   const [selectedDoc, setSelectedDoc] = React.useState<DocumentRecord | null>(null);
   const [selectedDocChunks, setSelectedDocChunks] = React.useState<DocumentChunkRecord[]>([]);
+  const [selectedDocUnits, setSelectedDocUnits] = React.useState<LearningUnitRecord[]>([]);
   const [loadingChunks, setLoadingChunks] = React.useState(false);
-  const [previewTab, setPreviewTab] = React.useState<'text' | 'chunks' | 'concepts'>('text');
+  const [previewTab, setPreviewTab] = React.useState<'text' | 'chunks' | 'concepts' | 'units'>('text');
+
+  // Processing records per material
+  const [processingRecords, setProcessingRecords] = React.useState<Record<string, MaterialProcessingRecord>>({});
+
+  // Duplicate notice modal state
+  const [duplicateModal, setDuplicateModal] = React.useState<{
+    decision: DuplicateDecision;
+    file: File;
+  } | null>(null);
 
   // Concept extraction & analysis state
   const [extractedConcepts, setExtractedConcepts] = React.useState<ConceptRecord[]>([]);
@@ -88,20 +115,43 @@ export function MaterialsView() {
 
   // Deletion modal state
   const [docToDelete, setDocToDelete] = React.useState<DocumentRecord | null>(null);
+  const [deleteCascadeSummary, setDeleteCascadeSummary] = React.useState<DeleteMaterialCascadeSummary | null>(null);
   const [isDeleting, setIsDeleting] = React.useState(false);
 
-  // Refs for cancellation
+  // Refs for cancellation and inputs
   const fileInputRef = React.useRef<HTMLInputElement | null>(null);
+  const replaceFileInputRef = React.useRef<HTMLInputElement | null>(null);
   const abortControllerRef = React.useRef<AbortController | null>(null);
   const analysisAbortRef = React.useRef<AbortController | null>(null);
 
+  const handleOpenDelete = React.useCallback((doc: DocumentRecord) => {
+    setDocToDelete(doc);
+    const storage = getStorage();
+    void getDeleteMaterialCascadeSummary(doc.id, storage).then(setDeleteCascadeSummary);
+  }, []);
+
+  const handleCloseDelete = React.useCallback(() => {
+    setDocToDelete(null);
+    setDeleteCascadeSummary(null);
+  }, []);
+
   // Load existing documents from storage
+  // Load existing documents and processing records from storage
   const loadDocuments = React.useCallback(async () => {
     try {
       const storage = getStorage();
-      const docs = await storage.documents.list();
+      const [docs, procs] = await Promise.all([
+        storage.documents.list(),
+        storage.processing.list(),
+      ]);
       docs.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
       setDocuments(docs);
+
+      const procMap: Record<string, MaterialProcessingRecord> = {};
+      for (const p of procs) {
+        procMap[p.materialId] = p;
+      }
+      setProcessingRecords(procMap);
       return docs;
     } catch (err) {
       console.error('Failed to load documents:', err);
@@ -114,12 +164,16 @@ export function MaterialsView() {
   React.useEffect(() => {
     let mounted = true;
     const storage = getStorage();
-    storage.documents
-      .list()
-      .then((docs) => {
+    Promise.all([storage.documents.list(), storage.processing.list()])
+      .then(([docs, procs]) => {
         if (mounted) {
           docs.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
           setDocuments(docs);
+          const procMap: Record<string, MaterialProcessingRecord> = {};
+          for (const p of procs) {
+            procMap[p.materialId] = p;
+          }
+          setProcessingRecords(procMap);
           setLoadingDocs(false);
         }
       })
@@ -133,25 +187,38 @@ export function MaterialsView() {
     };
   }, []);
 
-  // Load chunks and related concepts when a document is selected
+  // Load chunks, units, and concepts when a document is selected
   const handleSelectDoc = React.useCallback(async (doc: DocumentRecord) => {
     setSelectedDoc(doc);
     setLoadingChunks(true);
     setAnalysisError(null);
     try {
       const storage = getStorage();
-      const chunks = await storage.chunks.listByDocument(doc.id);
+      const [chunks, units, concepts, proc] = await Promise.all([
+        storage.chunks.listByDocument(doc.id),
+        storage.learningUnits.listByMaterial(doc.id),
+        storage.concepts.listByMaterial(doc.id),
+        storage.processing.getByMaterial(doc.id),
+      ]);
+
       chunks.sort((a, b) => a.chunkIndex - b.chunkIndex);
       setSelectedDocChunks(chunks);
+      setSelectedDocUnits(units);
 
-      // Find concepts that cite chunks from this document
       const docChunkIds = new Set(chunks.map((c) => c.id));
-      const allConcepts = await storage.concepts.list();
-      const related = allConcepts.filter((c) => c.sourceChunkIds.some((id) => docChunkIds.has(id)));
+      const related = concepts.length > 0
+        ? concepts
+        : (await storage.concepts.list()).filter((c) => c.sourceChunkIds.some((id) => docChunkIds.has(id)));
       related.sort((a, b) => a.extractionOrder - b.extractionOrder);
       setExtractedConcepts(related);
 
-      if (related.length > 0) {
+      if (proc) {
+        setProcessingRecords((prev) => ({ ...prev, [doc.id]: proc }));
+      }
+
+      if (units.length > 0) {
+        setPreviewTab('units');
+      } else if (related.length > 0) {
         setPreviewTab('concepts');
       } else {
         setPreviewTab('text');
@@ -160,26 +227,48 @@ export function MaterialsView() {
       console.error('Failed to load chunks or concepts for document:', err);
       setSelectedDocChunks([]);
       setExtractedConcepts([]);
+      setSelectedDocUnits([]);
     } finally {
       setLoadingChunks(false);
     }
   }, []);
 
-  // Process file upload
-  const processFile = async (file: File) => {
-    setLastAttemptedFile({ name: file.name, size: file.size });
-    setUploadError(null);
-    setIsProcessing(true);
-    setProgress({
-      stage: 'validating',
-      percent: 5,
-      message: `Validating ${file.name}...`,
-    });
-
-    const controller = new AbortController();
-    abortControllerRef.current = controller;
+  // Process file upload with in-flight deduplication and duplicate detection
+  const processFile = async (
+    file: File,
+    options: { allowDuplicate?: boolean; replaceMaterialId?: string } = {},
+  ) => {
+    // 1. In-flight double-drop / rapid picker deduplication
+    const sig = inFlightDeduplicator.getSignature(file.name, file.size, file.lastModified);
+    if (inFlightDeduplicator.isInFlight(sig)) {
+      return;
+    }
+    const unregisterInFlight = inFlightDeduplicator.register(sig);
 
     try {
+      // 2. Pre-flight duplicate check if not explicitly allowed or replacing
+      if (!options.allowDuplicate && !options.replaceMaterialId) {
+        const buffer = await file.arrayBuffer();
+        const fileHash = await computeFileHash(new Uint8Array(buffer));
+        const decision = evaluateDuplicateDecision(fileHash, file.name, documents);
+        if (decision.type !== 'UNIQUE') {
+          setDuplicateModal({ decision, file });
+          return;
+        }
+      }
+
+      setLastAttemptedFile({ name: file.name, size: file.size });
+      setUploadError(null);
+      setIsProcessing(true);
+      setProgress({
+        stage: 'validating',
+        percent: 5,
+        message: `Validating ${file.name}...`,
+      });
+
+      const controller = new AbortController();
+      abortControllerRef.current = controller;
+
       const result: IngestResult = await ingestDocument({
         file: {
           name: file.name,
@@ -188,6 +277,7 @@ export function MaterialsView() {
           lastModified: file.lastModified,
           arrayBuffer: () => file.arrayBuffer(),
         },
+        allowDuplicate: options.allowDuplicate,
         signal: controller.signal,
         onProgress: (p) => setProgress(p),
       });
@@ -201,18 +291,29 @@ export function MaterialsView() {
       }
 
       if (result.document && result.chunks) {
+        // If replacing an existing material, apply conservative concept matching
+        if (options.replaceMaterialId) {
+          const storage = getStorage();
+          const oldConcepts = await storage.concepts.listByMaterial(options.replaceMaterialId);
+          if (oldConcepts.length > 0) {
+            const replacePlan = planReplaceMaterialConcepts(
+              oldConcepts,
+              [],
+              result.document.contentHash,
+            );
+            await storage.concepts.putMany(replacePlan.conceptsToPut);
+          }
+        }
+
         addToast({
           type: 'success',
-          title: 'Document imported',
+          title: options.replaceMaterialId ? 'Material replaced' : 'Document imported',
           description: `"${result.document.filename}" imported with ${result.chunks.length} study chunks.`,
         });
 
         const updatedDocs = await loadDocuments();
         const freshDoc = updatedDocs.find((d) => d.id === result.documentId) || result.document;
-        setSelectedDoc(freshDoc);
-        setSelectedDocChunks(result.chunks);
-        setExtractedConcepts([]);
-        setPreviewTab('text');
+        await handleSelectDoc(freshDoc);
       }
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
@@ -221,6 +322,7 @@ export function MaterialsView() {
         message: `An unexpected error occurred: ${message}`,
       });
     } finally {
+      unregisterInFlight();
       setIsProcessing(false);
       abortControllerRef.current = null;
       if (fileInputRef.current) {
@@ -264,7 +366,7 @@ export function MaterialsView() {
     }
   };
 
-  // Run AI Concept Extraction on the selected document
+  // Run AI Concept Extraction and Learning Unit synthesis on the selected document
   const handleAnalyzeNotes = async () => {
     if (!selectedDoc) return;
     setIsAnalyzing(true);
@@ -273,6 +375,19 @@ export function MaterialsView() {
       stage: 'batching',
       percent: 5,
       message: 'Reading your material and identifying concepts…',
+    });
+
+    const storage = getStorage();
+    await storage.processing.put({
+      id: selectedDoc.id,
+      materialId: selectedDoc.id,
+      stage: 'ANALYZING',
+      progressPercent: 10,
+      message: 'Analyzing material notes...',
+      contentVersion: selectedDoc.contentHash,
+      promptVersion: '1.0',
+      createdAt: selectedDoc.createdAt,
+      updatedAt: nowISO(),
     });
 
     const controller = new AbortController();
@@ -287,21 +402,83 @@ export function MaterialsView() {
 
       if (!result.success) {
         setAnalysisError(result.error || 'Failed to extract concepts from this material.');
+        await storage.processing.put({
+          id: selectedDoc.id,
+          materialId: selectedDoc.id,
+          stage: 'FAILED',
+          progressPercent: 0,
+          message: result.error || 'Concept extraction failed.',
+          failedStage: 'ANALYZING',
+          errorCode: 'ANALYSIS_ERROR',
+          errorMessage: result.error || 'Concept extraction failed.',
+          retryable: true,
+          contentVersion: selectedDoc.contentHash,
+          createdAt: selectedDoc.createdAt,
+          updatedAt: nowISO(),
+        });
+        await loadDocuments();
         return;
       }
 
       setExtractedConcepts(result.concepts);
+
+      // Build deterministic learning units from extracted concepts
+      const unitResult = buildLearningUnits({
+        materialId: selectedDoc.id,
+        contentVersion: selectedDoc.contentHash,
+        concepts: result.concepts,
+        dependencies: result.dependencies,
+        chunks: selectedDocChunks,
+        docTitle: selectedDoc.filename,
+      });
+
+      await persistLearningUnits(unitResult.units, unitResult.conceptUnitMap, storage);
+      setSelectedDocUnits(unitResult.units);
+
+      // Mark processing as COMPLETE with real counts
+      await storage.processing.put({
+        id: selectedDoc.id,
+        materialId: selectedDoc.id,
+        stage: 'COMPLETE',
+        progressPercent: 100,
+        message: `Completed processing: ${unitResult.units.length} learning units and ${result.concepts.length} concepts ready.`,
+        counts: {
+          totalChunks: selectedDocChunks.length,
+          extractedConcepts: result.concepts.length,
+          totalUnits: unitResult.units.length,
+        },
+        contentVersion: selectedDoc.contentHash,
+        promptVersion: '1.0',
+        createdAt: selectedDoc.createdAt,
+        updatedAt: nowISO(),
+      });
+
       setPreviewTab('concepts');
       addToast({
         type: 'success',
-        title: 'Concepts extracted',
-        description: `Successfully identified ${result.concepts.length} concepts and ${result.dependencies.length} prerequisite links.`,
+        title: 'Concepts & Learning Units Ready',
+        description: `Identified ${result.concepts.length} concepts organized into ${unitResult.units.length} structured learning units.`,
       });
 
       await loadDocuments();
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       setAnalysisError(message);
+      await storage.processing.put({
+        id: selectedDoc.id,
+        materialId: selectedDoc.id,
+        stage: 'FAILED',
+        progressPercent: 0,
+        message,
+        failedStage: 'ANALYZING',
+        errorCode: 'UNEXPECTED_ANALYSIS_ERROR',
+        errorMessage: message,
+        retryable: true,
+        contentVersion: selectedDoc.contentHash,
+        createdAt: selectedDoc.createdAt,
+        updatedAt: nowISO(),
+      });
+      await loadDocuments();
     } finally {
       setIsAnalyzing(false);
       analysisAbortRef.current = null;
@@ -331,19 +508,22 @@ export function MaterialsView() {
     if (!docToDelete) return;
     setIsDeleting(true);
     try {
-      await deleteDocumentAndChunks(docToDelete.id);
+      const storage = getStorage();
+      await executeDeleteMaterialCascade(docToDelete.id, storage);
       addToast({
         type: 'info',
         title: 'Material deleted',
-        description: `"${docToDelete.filename}" and its chunks were removed.`,
+        description: `"${docToDelete.filename}" and all its dependent records were removed.`,
       });
       if (selectedDoc?.id === docToDelete.id) {
         setSelectedDoc(null);
         setSelectedDocChunks([]);
         setExtractedConcepts([]);
+        setSelectedDocUnits([]);
       }
       await loadDocuments();
       setDocToDelete(null);
+      setDeleteCascadeSummary(null);
     } catch (err) {
       console.error('Failed to delete document:', err);
       addToast({
@@ -395,6 +575,23 @@ export function MaterialsView() {
               accept=".pdf,.txt,.md,application/pdf,text/plain,text/markdown"
               onChange={handleFileChange}
               disabled={isProcessing}
+              className="sr-only"
+            />
+
+            {/* Hidden native replace input */}
+            <input
+              ref={replaceFileInputRef}
+              type="file"
+              id="material-replace-picker"
+              aria-label="Replace material file"
+              accept=".pdf,.txt,.md,application/pdf,text/plain,text/markdown"
+              onChange={(e) => {
+                const file = e.target.files?.[0];
+                if (file && selectedDoc) {
+                  void processFile(file, { replaceMaterialId: selectedDoc.id, allowDuplicate: true });
+                }
+                if (replaceFileInputRef.current) replaceFileInputRef.current.value = '';
+              }}
               className="sr-only"
             />
 
@@ -591,10 +788,36 @@ export function MaterialsView() {
                 <span>{extractedConcepts.length > 0 ? 'Re-analyze notes' : 'Analyze notes'}</span>
               </Button>
 
+              {/* Reprocess button */}
               <Button
                 variant="secondary"
                 size="sm"
-                onClick={() => setDocToDelete(selectedDoc)}
+                onClick={handleAnalyzeNotes}
+                disabled={isAnalyzing}
+                className="shrink-0 whitespace-nowrap"
+                title="Re-run analysis on this material"
+              >
+                <RefreshCw className="h-4 w-4 sm:mr-1.5" />
+                <span className="sr-only sm:not-sr-only">Reprocess</span>
+              </Button>
+
+              {/* Replace Material button */}
+              <Button
+                variant="secondary"
+                size="sm"
+                onClick={() => replaceFileInputRef.current?.click()}
+                disabled={isAnalyzing}
+                className="shrink-0 whitespace-nowrap"
+                title="Replace this material with updated file"
+              >
+                <RotateCw className="h-4 w-4 sm:mr-1.5" />
+                <span className="sr-only sm:not-sr-only">Replace</span>
+              </Button>
+
+              <Button
+                variant="secondary"
+                size="sm"
+                onClick={() => selectedDoc && handleOpenDelete(selectedDoc)}
                 className="shrink-0 text-[var(--danger)] hover:bg-[var(--danger)]/10"
               >
                 <Trash2 className="h-4 w-4" />
@@ -735,6 +958,19 @@ export function MaterialsView() {
             >
               <Network className="h-3.5 w-3.5" />
               <span>Extracted Concepts ({extractedConcepts.length})</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => setPreviewTab('units')}
+              className={cn(
+                'pb-2 font-medium border-b-2 transition-colors cursor-pointer flex items-center gap-1.5',
+                previewTab === 'units'
+                  ? 'border-[var(--primary)] text-[var(--text-primary)]'
+                  : 'border-transparent text-[var(--text-muted)] hover:text-[var(--text-secondary)]',
+              )}
+            >
+              <Layers className="h-3.5 w-3.5" />
+              <span>Learning Units ({selectedDocUnits.length})</span>
             </button>
           </div>
 
@@ -930,6 +1166,71 @@ export function MaterialsView() {
               )}
             </div>
           )}
+
+          {/* Tab 4: Learning Units View */}
+          {previewTab === 'units' && (
+            <div className="space-y-4">
+              {selectedDocUnits.length === 0 ? (
+                <Card>
+                  <CardContent className="p-8 text-center space-y-3">
+                    <Layers className="h-8 w-8 text-[var(--primary)] mx-auto opacity-70" />
+                    <p className="text-sm font-semibold text-[var(--text-primary)]">
+                      No learning units created yet
+                    </p>
+                    <p className="text-xs text-[var(--text-muted)] max-w-md mx-auto">
+                      Analyze your notes to automatically synthesize concepts into structured learning units.
+                    </p>
+                    <Button variant="primary" size="sm" onClick={handleAnalyzeNotes} disabled={isAnalyzing}>
+                      Analyze notes to build units
+                    </Button>
+                  </CardContent>
+                </Card>
+              ) : (
+                <div className="grid grid-cols-1 gap-4">
+                  {selectedDocUnits.map((unit) => {
+                    const unitConcepts = extractedConcepts.filter((c) => unit.conceptIds.includes(c.id));
+                    return (
+                      <Card key={unit.id} className="overflow-hidden border border-[var(--border-color)]">
+                        <CardHeader className="py-3 px-4 sm:px-6 bg-[var(--surface-raised)]/40 border-b border-[var(--border-color)] flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                          <div className="flex items-center gap-2.5">
+                            <span className="font-mono text-xs font-bold px-2 py-0.5 rounded bg-[var(--primary)]/10 text-[var(--primary)]">
+                              Unit #{unit.order + 1}
+                            </span>
+                            <h3 className="text-base font-bold text-[var(--text-primary)]">
+                              {unit.title}
+                            </h3>
+                          </div>
+                          <span className="text-[10px] font-mono px-2 py-0.5 rounded bg-[var(--surface)] border border-[var(--border-color)] text-[var(--text-muted)]">
+                            v:{unit.contentVersion.slice(0, 8)}
+                          </span>
+                        </CardHeader>
+                        <CardContent className="p-4 sm:p-6 space-y-3">
+                          <p className="text-xs sm:text-sm text-[var(--text-secondary)] leading-relaxed">
+                            {unit.summary}
+                          </p>
+                          <div>
+                            <p className="text-xs font-semibold text-[var(--text-muted)] uppercase tracking-wider mb-1.5">
+                              Concepts in this Unit ({unit.conceptIds.length})
+                            </p>
+                            <div className="flex flex-wrap gap-1.5">
+                              {unitConcepts.map((c) => (
+                                <span
+                                  key={c.id}
+                                  className="text-xs px-2.5 py-1 rounded-md bg-[var(--surface)] border border-[var(--border-color)] text-[var(--text-primary)]"
+                                >
+                                  {c.title}
+                                </span>
+                              ))}
+                            </div>
+                          </div>
+                        </CardContent>
+                      </Card>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+          )}
         </section>
       )}
 
@@ -955,6 +1256,7 @@ export function MaterialsView() {
           <div className="grid grid-cols-1 gap-3">
             {documents.map((doc) => {
               const isSelected = selectedDoc?.id === doc.id;
+              const proc = processingRecords[doc.id];
               const chunkCount =
                 typeof doc.metadata?.chunkCount === 'number'
                   ? doc.metadata.chunkCount
@@ -991,6 +1293,25 @@ export function MaterialsView() {
                             {conceptCount} concepts
                           </span>
                         )}
+                        {proc && (
+                          <span
+                            className={cn(
+                              'text-[10px] font-semibold px-2 py-0.5 rounded-full border',
+                              proc.stage === 'COMPLETE' && 'bg-[var(--success)]/15 border-[var(--success)]/30 text-[var(--success)]',
+                              proc.stage === 'ANALYZING' && 'bg-[var(--accent-blue)]/15 border-[var(--accent-blue)]/30 text-[var(--accent-blue)]',
+                              proc.stage === 'FAILED' && 'bg-[var(--danger)]/15 border-[var(--danger)]/30 text-[var(--danger)]',
+                              proc.stage === 'SAVED' && 'bg-[var(--surface-raised)] border-[var(--border-color)] text-[var(--text-muted)]',
+                            )}
+                          >
+                            {proc.stage === 'COMPLETE'
+                              ? `Ready • ${proc.counts?.totalUnits ?? 0} units`
+                              : proc.stage === 'ANALYZING'
+                                ? `Analyzing (${proc.currentBatch ?? 1}/${proc.totalBatches ?? 1})`
+                                : proc.stage === 'FAILED'
+                                  ? `Failed (${proc.errorCode ?? 'retryable'})`
+                                  : 'Saved'}
+                          </span>
+                        )}
                       </div>
                       <p className="text-xs text-[var(--text-muted)] mt-0.5">
                         {formatBytes(doc.fileSize)} • {chunkCount} chunks • {doc.extractedText.length.toLocaleString()} chars • Added{' '}
@@ -1000,6 +1321,19 @@ export function MaterialsView() {
                   </div>
 
                   <div className="flex items-center gap-2 shrink-0 self-end sm:self-center">
+                    {proc?.stage === 'FAILED' && (
+                      <Button
+                        size="sm"
+                        variant="secondary"
+                        onClick={async () => {
+                          await handleSelectDoc(doc);
+                          void handleAnalyzeNotes();
+                        }}
+                        className="text-xs text-[var(--primary)]"
+                      >
+                        Retry
+                      </Button>
+                    )}
                     <Button
                       size="sm"
                       variant={isSelected ? 'primary' : 'secondary'}
@@ -1010,7 +1344,7 @@ export function MaterialsView() {
                     <Button
                       size="sm"
                       variant="ghost"
-                      onClick={() => setDocToDelete(doc)}
+                      onClick={() => handleOpenDelete(doc)}
                       aria-label={`Delete ${doc.filename}`}
                       className="text-[var(--danger)] hover:bg-[var(--danger)]/10"
                     >
@@ -1062,7 +1396,7 @@ export function MaterialsView() {
       )}
 
       {/* Delete Confirmation Dialog */}
-      <Dialog open={!!docToDelete} onOpenChange={(open) => !open && setDocToDelete(null)}>
+      <Dialog open={!!docToDelete} onOpenChange={(open) => !open && handleCloseDelete()}>
         <DialogContent
           title="Delete study material?"
           description="Are you sure you want to delete this document?"
@@ -1072,15 +1406,30 @@ export function MaterialsView() {
               Are you sure you want to delete{' '}
               <strong className="text-[var(--text-primary)]">{docToDelete?.filename}</strong>?
             </p>
-            <p className="text-xs text-[var(--text-muted)]">
-              This will permanently remove the document and its associated study chunks from this
-              device&apos;s local storage. This action cannot be undone.
-            </p>
+            {deleteCascadeSummary ? (
+              <div className="p-3 rounded-lg bg-[var(--surface)] border border-[var(--border-color)] text-xs space-y-1.5">
+                <p className="font-semibold text-[var(--danger)]">
+                  This will permanently remove the document and its associated study chunks:
+                </p>
+                <ul className="list-disc pl-5 space-y-0.5 text-[var(--text-secondary)]">
+                  <li>{deleteCascadeSummary.chunkCount} study chunks</li>
+                  <li>{deleteCascadeSummary.conceptCount} extracted concepts</li>
+                  <li>{deleteCascadeSummary.unitCount} learning units</li>
+                  <li>{deleteCascadeSummary.questionCount} recall questions</li>
+                  <li>{deleteCascadeSummary.attemptCount} study sessions & recall attempts</li>
+                </ul>
+              </div>
+            ) : (
+              <p className="text-xs text-[var(--text-muted)]">
+                This will permanently remove the document and its associated study chunks from this
+                device&apos;s local storage. This action cannot be undone.
+              </p>
+            )}
           </div>
           <DialogFooter className="mt-4">
             <Button
               variant="secondary"
-              onClick={() => setDocToDelete(null)}
+              onClick={handleCloseDelete}
               disabled={isDeleting}
             >
               Cancel
@@ -1095,6 +1444,108 @@ export function MaterialsView() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      {/* Duplicate Notice Modal */}
+      {duplicateModal && (
+        <Dialog open={!!duplicateModal} onOpenChange={(open) => !open && setDuplicateModal(null)}>
+          <DialogContent
+            title={
+              duplicateModal.decision.type === 'EXACT_DUPLICATE'
+                ? 'Document Already in Library'
+                : 'Filename Collision'
+            }
+            description={
+              duplicateModal.decision.type === 'EXACT_DUPLICATE'
+                ? 'An identical document is already stored in your local library.'
+                : 'A document with this filename already exists, but its content is different.'
+            }
+          >
+            <div className="space-y-4 pt-2 text-sm text-[var(--text-secondary)]">
+              {duplicateModal.decision.type === 'EXACT_DUPLICATE' ? (
+                <>
+                  <p>
+                    The file <strong className="text-[var(--text-primary)]">{duplicateModal.file.name}</strong> has identical bytes to{' '}
+                    <strong className="text-[var(--text-primary)]">
+                      {duplicateModal.decision.existingDocument?.filename ?? 'an existing document'}
+                    </strong>{' '}
+                    (SHA-256 match).
+                  </p>
+                  <p className="text-xs text-[var(--text-muted)]">
+                    You can open the existing material or explicitly import it as a separate copy.
+                  </p>
+                </>
+              ) : (
+                <>
+                  <p>
+                    A material named <strong className="text-[var(--text-primary)]">{duplicateModal.file.name}</strong> already exists, but the file you selected has different content.
+                  </p>
+                  <p className="text-xs text-[var(--text-muted)]">
+                    Would you like to import this as a new material, or replace the existing material?
+                  </p>
+                </>
+              )}
+            </div>
+
+            <DialogFooter className="mt-4 flex-col sm:flex-row gap-2">
+              <Button variant="ghost" onClick={() => setDuplicateModal(null)}>
+                Cancel
+              </Button>
+              {duplicateModal.decision.type === 'EXACT_DUPLICATE' ? (
+                <>
+                  <Button
+                    variant="secondary"
+                    onClick={() => {
+                      const f = duplicateModal.file;
+                      setDuplicateModal(null);
+                      void processFile(f, { allowDuplicate: true });
+                    }}
+                  >
+                    Import as Separate Copy
+                  </Button>
+                  {duplicateModal.decision.existingDocument && (
+                    <Button
+                      variant="primary"
+                      onClick={() => {
+                        const doc = duplicateModal.decision.existingDocument!;
+                        setDuplicateModal(null);
+                        void handleSelectDoc(doc);
+                      }}
+                    >
+                      Open Existing
+                    </Button>
+                  )}
+                </>
+              ) : (
+                <>
+                  <Button
+                    variant="secondary"
+                    onClick={() => {
+                      const f = duplicateModal.file;
+                      setDuplicateModal(null);
+                      void processFile(f, { allowDuplicate: true });
+                    }}
+                  >
+                    Import as New
+                  </Button>
+                  {duplicateModal.decision.existingDocument && (
+                    <Button
+                      variant="primary"
+                      onClick={() => {
+                        const f = duplicateModal.file;
+                        const existingId = duplicateModal.decision.existingDocument!.id;
+                        setDuplicateModal(null);
+                        void processFile(f, { replaceMaterialId: existingId, allowDuplicate: true });
+                      }}
+                    >
+                      Replace Existing
+                    </Button>
+                  )}
+                </>
+              )}
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
+      )}
     </div>
   );
 }

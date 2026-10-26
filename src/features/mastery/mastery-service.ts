@@ -163,9 +163,9 @@ export function calculateMasteryUpdate(input: CalculateMasteryInput): MasterySta
 
 export interface SaveAttemptAndMasteryOptions {
   attempt: RecallAttemptRecord;
-  currentMastery: MasteryStateRecord | null;
+  currentMastery?: MasteryStateRecord | null;
   currentSr?: SpacedRepetitionStateRecord | null;
-  pastAttempts: RecallAttemptRecord[];
+  pastAttempts?: RecallAttemptRecord[];
   timeZone?: string;
   dbName?: string;
 }
@@ -192,6 +192,28 @@ export async function saveAttemptAndMasteryAtomic(
 ): Promise<SaveAttemptAndMasteryResult> {
   const { attempt, currentMastery, currentSr, pastAttempts, timeZone, dbName = DB_NAME } = options;
 
+  const db = await openDatabase(dbName);
+  const effectiveCurrentMastery =
+    currentMastery !== undefined
+      ? currentMastery
+      : (((await db.getFromIndex('masteryStates', 'by-concept', attempt.conceptId)) as
+          | MasteryStateRecord
+          | undefined) ?? null);
+
+  const effectiveCurrentSr =
+    currentSr !== undefined
+      ? currentSr
+      : (((await db.getFromIndex('spacedRepetitionStates', 'by-concept', attempt.conceptId)) as
+          | SpacedRepetitionStateRecord
+          | undefined) ?? null);
+
+  const effectivePastAttempts: RecallAttemptRecord[] =
+    pastAttempts !== undefined
+      ? pastAttempts
+      : (((await db.getAllFromIndex('recallAttempts', 'by-concept', attempt.conceptId)) as
+          | RecallAttemptRecord[]
+          | undefined) ?? []);
+
   const effectiveScore = attempt.compositeScore ?? attempt.judgeScore ?? 0;
   const numConfidence =
     typeof attempt.confidence === 'number'
@@ -204,14 +226,14 @@ export async function saveAttemptAndMasteryAtomic(
 
   const updatedMastery = calculateMasteryUpdate({
     conceptId: attempt.conceptId,
-    currentMastery,
+    currentMastery: effectiveCurrentMastery,
     newAttempt: {
       score: effectiveScore,
       qualityGrade: attempt.qualityGrade,
       confidence: numConfidence,
       createdAt: attempt.createdAt,
     },
-    pastAttempts: pastAttempts.map((p) => ({
+    pastAttempts: effectivePastAttempts.map((p) => ({
       score: p.compositeScore ?? p.judgeScore ?? 0,
       qualityGrade: p.qualityGrade,
       confidence:
@@ -228,11 +250,16 @@ export async function saveAttemptAndMasteryAtomic(
 
   const { record: updatedSr } = calculateNextSm2State({
     conceptId: attempt.conceptId,
-    currentSr: currentSr ?? null,
+    currentSr: effectiveCurrentSr,
     qualityGrade: attempt.qualityGrade,
     reviewInstant: attempt.createdAt,
     timeZone,
   });
+
+  if (attempt.materialId) {
+    updatedMastery.materialId = attempt.materialId;
+    updatedSr.materialId = attempt.materialId;
+  }
 
   const stores = [
     'recallAttempts',

@@ -15,12 +15,14 @@ export type StudySourceMode = 'document' | 'topic';
 export type MessageRole = 'user' | 'assistant' | 'system';
 
 export type DifficultyPreference = 'beginner' | 'intermediate' | 'advanced';
+export type ThemePreference = 'light' | 'dark' | 'system';
 
 export interface WorkspacePreferences {
   model: string;
   difficulty: DifficultyPreference;
   reducedMotion: boolean;
   reviewNotifications?: boolean;
+  theme?: ThemePreference;
 }
 
 export interface WorkspaceRecord {
@@ -31,15 +33,31 @@ export interface WorkspaceRecord {
   preferences: WorkspacePreferences;
 }
 
+export type ProcessingStage =
+  | 'SELECTED'
+  | 'VALIDATED'
+  | 'EXTRACTED'
+  | 'PREVIEWED'
+  | 'SAVED'
+  | 'ANALYZING'
+  | 'UNITS_BUILT'
+  | 'COMPLETE'
+  | 'FAILED'
+  | 'CANCELLED';
+
 export interface DocumentRecord {
-  id: string;
+  id: string; // Acts as materialId
+  materialId?: string; // Explicit stable alias
   subjectId?: string;
   filename: string;
   fileType: DocumentFileType;
   fileSize: number;
   extractedText: string;
   analysisStatus: DocumentAnalysisStatus;
-  contentHash: string;
+  fileHash?: string; // SHA-256 of raw file bytes
+  contentHash: string; // SHA-256 of normalized extracted text
+  contentVersion?: string; // Hash version stamp
+  promptVersion?: string; // Prompt template version stamp
   metadata?: Record<string, unknown>;
   createdAt: string;
   updatedAt: string;
@@ -48,6 +66,7 @@ export interface DocumentRecord {
 export interface DocumentChunkRecord {
   id: string;
   documentId: string;
+  materialId?: string; // Stable material link
   chunkIndex: number;
   text: string;
   startOffset: number;
@@ -56,6 +75,7 @@ export interface DocumentChunkRecord {
   pageEnd?: number;
   headingPath?: string[];
   contentHash: string;
+  contentVersion?: string;
   metadata?: Record<string, unknown>;
   createdAt: string;
 }
@@ -71,6 +91,8 @@ export interface SubjectRecord {
 export interface ConceptRecord {
   id: string;
   subjectId?: string;
+  materialId?: string; // Stable material link
+  unitId?: string; // Link to learning unit
   title: string;
   summary: string;
   canonicalExplanation: string;
@@ -80,8 +102,61 @@ export interface ConceptRecord {
   status: ConceptStatus;
   confidence: number; // 0-1
   extractionOrder: number;
+  contentVersion?: string;
+  promptVersion?: string;
+  archived?: boolean; // Set when material is replaced and concept is preserved
   createdAt: string;
   updatedAt: string;
+}
+
+export interface LearningUnitRecord {
+  id: string; // unitId (UUID)
+  materialId: string;
+  order: number;
+  title: string;
+  summary: string;
+  conceptIds: string[];
+  sourceChunkIds: string[];
+  contentVersion: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface MaterialProcessingRecord {
+  id: string; // materialId
+  materialId: string;
+  stage: ProcessingStage;
+  currentStage?: ProcessingStage;
+  progressPercent: number; // 0-100
+  currentBatch?: number; // Real numbers, e.g. 3
+  totalBatches?: number; // Real numbers, e.g. 8
+  message: string;
+  fileHash?: string;
+  contentHash?: string;
+  contentVersion?: string;
+  promptVersion?: string;
+  counts?: {
+    totalChunks?: number;
+    extractedConcepts?: number;
+    totalUnits?: number;
+  };
+  errorCode?: string;
+  errorMessage?: string;
+  retryable?: boolean;
+  failedStage?: ProcessingStage;
+  analyzedBatchIndices?: number[];
+  accumulatedConcepts?: Array<Record<string, unknown>>;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface MaterialFileRecord {
+  id: string; // materialId
+  filename: string;
+  mimeType: string;
+  size: number;
+  blob?: Blob;
+  createdAt: string;
 }
 
 export interface ConceptDependencyRecord {
@@ -94,17 +169,27 @@ export interface ConceptDependencyRecord {
   createdAt: string;
 }
 
+export type SessionStatus = 'active' | 'paused' | 'completed' | 'abandoned';
+
 export interface StudySessionRecord {
   id: string;
   subjectId?: string;
+  materialId?: string; // Linked material ID
+  learningUnitId?: string; // Linked learning unit ID
+  unitIds?: string[]; // Selected learning unit IDs in scope
+  mode?: 'study' | 'recall' | 'revision'; // Current active learning mode
+  status?: SessionStatus; // active | paused | completed | abandoned
   machineState: string; // 13-state machine state (IDLE, STUDYING_CONCEPT, etc.)
   currentConceptId?: string;
+  currentUnitId?: string;
+  currentQuestionId?: string;
   draftAnswer?: string;
   selectedConfidence?: number; // 1 (Not very), 2 (Somewhat), 3 (Very)
   sourceMode: StudySourceMode;
   startedAt: string;
   updatedAt: string;
   endedAt?: string;
+  summarySnapshot?: Record<string, unknown>;
 }
 
 export interface StudyPathItemRecord {
@@ -120,12 +205,17 @@ export interface StudyPathItemRecord {
 export interface RecallQuestionRecord {
   id: string;
   conceptId: string;
+  materialId?: string;
+  unitId?: string;
   prompt: string;
   questionStyle: string; // explanation, comparison, cause/effect, process, application
   referencePoints: string[];
   sourceChunkIds: string[];
   difficulty: number; // 1-5
   expectedKeyPoints: string[];
+  contentVersion?: string;
+  promptVersion?: string;
+  archived?: boolean;
   createdAt: string;
 }
 
@@ -134,6 +224,8 @@ export interface RecallAttemptRecord {
   sessionId: string;
   questionId: string;
   conceptId: string;
+  materialId?: string;
+  unitId?: string;
   answerText: string;
   confidence: ConfidenceLevel | number;
   semanticScore?: number | null; // 0-100
@@ -149,6 +241,7 @@ export interface RecallAttemptRecord {
 export interface MasteryStateRecord {
   id: string;
   conceptId: string;
+  materialId?: string;
   level: number; // 0-4
   percentage: number; // 0-100
   masteryLevel?: MasteryLevel;
@@ -165,6 +258,7 @@ export interface MasteryStateRecord {
 export interface SpacedRepetitionStateRecord {
   id: string;
   conceptId: string;
+  materialId?: string;
   repetitions: number;
   easinessFactor: number; // EF >= 1.30
   intervalDays: number;
@@ -192,7 +286,7 @@ export interface LearningEventRecord {
 }
 
 /**
- * Backup format version 1
+ * Backup format version 1 and 2
  * Source of truth: TECH_STACK.md §6
  */
 export interface EduMentorBackupEnvelope {
@@ -214,7 +308,33 @@ export interface EduMentorBackupEnvelope {
   spacedRepetitionStates: SpacedRepetitionStateRecord[];
   conversationMessages: ConversationMessageRecord[];
   learningEvents?: LearningEventRecord[];
+  learningUnits?: LearningUnitRecord[];
+  processing?: MaterialProcessingRecord[];
+  workflowState?: WorkflowStateRecord[];
   preferences: WorkspacePreferences;
+}
+
+/** Workflow selection options */
+export type WorkflowSelection =
+  | { kind: 'WHOLE_MATERIAL' }
+  | { kind: 'UNITS'; unitIds: string[] };
+
+/** Workflow state per material */
+export interface WorkflowStateRecord {
+  id: string; // materialId
+  materialId: string;
+  selection: WorkflowSelection;
+  lastChosenMode?: 'study' | 'recall' | 'revision';
+  lastSessionId?: string;
+  updatedAt: string;
+}
+
+/** Step 4 Learning Launch Context Contract */
+export interface LearningLaunchContext {
+  materialId: string;
+  selection: WorkflowSelection;
+  mode: 'study' | 'recall' | 'revision';
+  sessionId?: string;
 }
 
 /** Backup inspection preview summary */
@@ -238,5 +358,8 @@ export interface BackupPreviewSummary {
     spacedRepetitionStates: number;
     conversationMessages: number;
     learningEvents: number;
+    learningUnits?: number;
+    processing?: number;
+    workflowState?: number;
   };
 }

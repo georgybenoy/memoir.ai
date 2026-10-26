@@ -208,7 +208,7 @@ test.describe('End-to-End Learning Journey & Resilience', () => {
     }
     const backupBuffer = Buffer.concat(chunks);
     const backupJson = JSON.parse(backupBuffer.toString('utf-8'));
-    expect(backupJson.schemaVersion).toBe(1);
+    expect(backupJson.schemaVersion).toBe(2);
     expect(backupJson.appVersion).toBe('0.1.0');
     expect(backupJson.documents.length).toBeGreaterThan(0);
 

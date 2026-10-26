@@ -206,7 +206,7 @@ export function SplashScreen() {
         aria-label="EduMentor is loading"
         className="fixed inset-0 z-[9999] flex flex-col items-center justify-center select-none overflow-hidden"
         style={{
-          backgroundColor: '#070614',
+          backgroundColor: 'var(--splash-bg)',
           opacity: isExiting ? 0 : 1,
           transform: isExiting ? 'scale(1.04)' : 'scale(1)',
           pointerEvents: isExiting ? 'none' : 'auto',
@@ -220,8 +220,8 @@ export function SplashScreen() {
           className="absolute inset-0 pointer-events-none"
           style={{
             backgroundImage: `
-              linear-gradient(to right, rgba(139, 92, 246, 0.05) 1px, transparent 1px),
-              linear-gradient(to bottom, rgba(139, 92, 246, 0.05) 1px, transparent 1px)
+              linear-gradient(to right, var(--splash-grid) 1px, transparent 1px),
+              linear-gradient(to bottom, var(--splash-grid) 1px, transparent 1px)
             `,
             backgroundSize: '48px 48px',
             maskImage: 'radial-gradient(circle at center, black 35%, transparent 80%)',
@@ -242,7 +242,7 @@ export function SplashScreen() {
               width: '120px',
               height: '120px',
               background:
-                'radial-gradient(circle, rgba(139, 92, 246, 0.75) 0%, rgba(34, 211, 238, 0.45) 55%, transparent 75%)',
+                'radial-gradient(circle, var(--splash-glow-1) 0%, var(--splash-glow-2) 55%, transparent 75%)',
               filter: 'blur(24px)',
             }}
             aria-hidden="true"
@@ -262,10 +262,10 @@ export function SplashScreen() {
             <svg viewBox="0 0 210 210" className="w-full h-full overflow-visible">
               <defs>
                 <linearGradient id="ringGrad1" x1="0%" y1="0%" x2="100%" y2="100%">
-                  <stop offset="0%" stopColor="#8b5cf6" stopOpacity="0.85" />
-                  <stop offset="45%" stopColor="#22d3ee" stopOpacity="0.9" />
-                  <stop offset="75%" stopColor="#8b5cf6" stopOpacity="0.15" />
-                  <stop offset="100%" stopColor="#38bdf8" stopOpacity="0.4" />
+                  <stop offset="0%" stopColor="var(--splash-accent-1)" stopOpacity="0.85" />
+                  <stop offset="45%" stopColor="var(--splash-accent-2)" stopOpacity="0.9" />
+                  <stop offset="75%" stopColor="var(--splash-accent-1)" stopOpacity="0.15" />
+                  <stop offset="100%" stopColor="var(--splash-accent-3)" stopOpacity="0.4" />
                 </linearGradient>
               </defs>
               <ellipse
@@ -279,7 +279,7 @@ export function SplashScreen() {
                 strokeDasharray="160 50 40 30"
               />
               {/* Orbital accent node */}
-              <circle cx="205" cy="105" r="3" fill="#22d3ee" filter="drop-shadow(0 0 6px #22d3ee)" />
+              <circle cx="205" cy="105" r="3" fill="var(--splash-accent-2)" filter="drop-shadow(0 0 6px var(--splash-accent-2))" />
             </svg>
           </div>
 
@@ -296,10 +296,10 @@ export function SplashScreen() {
             <svg viewBox="0 0 190 190" className="w-full h-full overflow-visible">
               <defs>
                 <linearGradient id="ringGrad2" x1="100%" y1="0%" x2="0%" y2="100%">
-                  <stop offset="0%" stopColor="#22d3ee" stopOpacity="0.8" />
-                  <stop offset="50%" stopColor="#a855f7" stopOpacity="0.85" />
-                  <stop offset="80%" stopColor="#38bdf8" stopOpacity="0.1" />
-                  <stop offset="100%" stopColor="#a855f7" stopOpacity="0.4" />
+                  <stop offset="0%" stopColor="var(--splash-accent-2)" stopOpacity="0.8" />
+                  <stop offset="50%" stopColor="var(--splash-accent-4)" stopOpacity="0.85" />
+                  <stop offset="80%" stopColor="var(--splash-accent-3)" stopOpacity="0.1" />
+                  <stop offset="100%" stopColor="var(--splash-accent-4)" stopOpacity="0.4" />
                 </linearGradient>
               </defs>
               <ellipse
@@ -313,7 +313,7 @@ export function SplashScreen() {
                 strokeDasharray="120 40 30 20"
               />
               {/* Orbital satellite node */}
-              <circle cx="5" cy="95" r="2.5" fill="#a855f7" filter="drop-shadow(0 0 5px #a855f7)" />
+              <circle cx="5" cy="95" r="2.5" fill="var(--splash-accent-4)" filter="drop-shadow(0 0 5px var(--splash-accent-4))" />
             </svg>
           </div>
 
@@ -321,7 +321,7 @@ export function SplashScreen() {
           <div
             className="relative z-10 flex items-center justify-center splash-levitate-anim"
             style={{
-              filter: 'drop-shadow(0 0 18px rgba(139, 92, 246, 0.45))',
+              filter: 'drop-shadow(0 0 18px var(--splash-glow-1))',
             }}
           >
             <Image
@@ -339,8 +339,8 @@ export function SplashScreen() {
           <div
             className="absolute top-2 right-1 z-20 pointer-events-none splash-twinkle-1-anim"
             style={{
-              color: '#38bdf8',
-              textShadow: '0 0 10px #22d3ee, 0 0 20px #22d3ee',
+              color: 'var(--splash-accent-3)',
+              textShadow: '0 0 10px var(--splash-text-glow), 0 0 20px var(--splash-text-glow)',
               fontSize: '18px',
               lineHeight: 1,
             }}
@@ -353,8 +353,8 @@ export function SplashScreen() {
           <div
             className="absolute bottom-4 left-2 z-20 pointer-events-none splash-twinkle-2-anim"
             style={{
-              color: '#a78bfa',
-              textShadow: '0 0 10px #8b5cf6, 0 0 18px #a855f7',
+              color: 'var(--splash-accent-1)',
+              textShadow: '0 0 10px var(--splash-accent-1), 0 0 18px var(--splash-accent-4)',
               fontSize: '15px',
               lineHeight: 1,
             }}
@@ -368,6 +368,7 @@ export function SplashScreen() {
         <div className="flex flex-col items-center mt-7 text-center space-y-3 z-10">
           {/* Brand Title: Edu in white, Mentor in violet-to-cyan gradient */}
           <h1
+            data-testid="splash-heading"
             className="font-extrabold select-none"
             style={{
               fontSize: '1.65rem',
@@ -376,10 +377,10 @@ export function SplashScreen() {
               lineHeight: 1.1,
             }}
           >
-            <span style={{ color: '#f8fafc' }}>Edu</span>
+            <span style={{ color: 'var(--splash-title-edu)' }}>Edu</span>
             <span
               style={{
-                backgroundImage: 'linear-gradient(90deg, #a78bfa, #38bdf8)',
+                backgroundImage: 'linear-gradient(90deg, var(--splash-accent-1), var(--splash-accent-3))',
                 WebkitBackgroundClip: 'text',
                 WebkitTextFillColor: 'transparent',
               }}
@@ -394,9 +395,11 @@ export function SplashScreen() {
             style={{
               width: '220px',
               height: '4px',
-              backgroundColor: 'rgba(255, 255, 255, 0.07)',
+              backgroundColor: 'var(--splash-card-bg)',
             }}
             role="progressbar"
+            aria-label="EduMentor initialization progress"
+            aria-valuetext={statusCopy}
             aria-valuenow={Math.round(progress)}
             aria-valuemin={0}
             aria-valuemax={100}
@@ -405,8 +408,8 @@ export function SplashScreen() {
               className="h-full rounded-full"
               style={{
                 width: `${progress}%`,
-                backgroundImage: 'linear-gradient(90deg, #8b5cf6, #22d3ee)',
-                boxShadow: '0 0 12px #8b5cf6',
+                backgroundImage: 'linear-gradient(90deg, var(--splash-accent-1), var(--splash-accent-2))',
+                boxShadow: '0 0 12px var(--splash-accent-1)',
                 transition: 'width 60ms linear',
               }}
             />
@@ -417,7 +420,7 @@ export function SplashScreen() {
             className="font-normal tracking-wide min-h-[1.25rem] transition-all duration-200"
             style={{
               fontSize: '0.78rem',
-              color: '#94a3b8',
+              color: 'var(--splash-subtitle)',
             }}
           >
             {statusCopy}

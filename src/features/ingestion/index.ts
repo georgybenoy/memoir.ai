@@ -5,3 +5,5 @@ export * from './normalize';
 export * from './chunk';
 export * from './provenance';
 export * from './ingest';
+export * from './processing-service';
+export * from './duplicates';

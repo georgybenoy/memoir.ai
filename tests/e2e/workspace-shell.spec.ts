@@ -1,28 +1,38 @@
 import { test, expect } from '@playwright/test';
 
 test.describe('Workspace Shell Layout and Responsiveness', () => {
+  test.beforeEach(async ({ page }) => {
+    // Dismiss splash screen instantly
+    await page.addInitScript(() => {
+      try {
+        sessionStorage.setItem('edumentor_loaded', 'true');
+      } catch {
+        // ignore
+      }
+    });
+  });
+
   test('renders full three-panel layout on desktop viewport', async ({ page }) => {
     await page.setViewportSize({ width: 1280, height: 800 });
-    await page.goto('/app');
+    await page.goto('/learn');
 
     // Header elements
     await expect(page.getByText('EduMentor', { exact: true })).toBeVisible();
     await expect(page.getByText('Saved on this device')).toBeVisible();
     await expect(page.getByText('Online')).toBeVisible();
 
+    // Primary Action
+    await expect(page.getByRole('button', { name: 'Start Learning' }).first()).toBeVisible();
+
     // Navigation Sidebar
     const nav = page.getByRole('navigation', { name: /workspace navigation/i });
     await expect(nav).toBeVisible();
-    await expect(nav.getByRole('button', { name: 'Home' })).toBeVisible();
-    await expect(nav.getByRole('button', { name: 'Study Materials' })).toBeVisible();
+    await expect(nav.getByRole('button', { name: 'Home / My Materials' })).toBeVisible();
     await expect(nav.getByRole('button', { name: 'Concept Map' })).toBeVisible();
-    await expect(nav.getByRole('button', { name: 'Recall Practice' })).toBeVisible();
-    await expect(nav.getByRole('button', { name: 'Spaced Review' })).toBeVisible();
     await expect(nav.getByRole('button', { name: 'Data & Settings' })).toBeVisible();
 
     // Main Canvas
-    await expect(page.getByRole('heading', { name: 'What are you learning today?' })).toBeVisible();
-    await expect(page.getByText('Import Study Material')).toBeVisible();
+    await expect(page.getByRole('heading', { name: 'My Learning Journey', level: 1 })).toBeVisible();
 
     // Assistant panel
     const assistant = page.getByRole('complementary', { name: /ai tutor assistant/i });
@@ -32,7 +42,7 @@ test.describe('Workspace Shell Layout and Responsiveness', () => {
 
   test('toggles sidebar collapse on desktop', async ({ page }) => {
     await page.setViewportSize({ width: 1280, height: 800 });
-    await page.goto('/app');
+    await page.goto('/learn');
 
     const collapseBtn = page.getByRole('button', { name: /collapse sidebar/i });
     await expect(collapseBtn).toBeVisible();
@@ -48,7 +58,7 @@ test.describe('Workspace Shell Layout and Responsiveness', () => {
 
   test('toggles assistant panel visibility', async ({ page }) => {
     await page.setViewportSize({ width: 1280, height: 800 });
-    await page.goto('/app');
+    await page.goto('/learn');
 
     const assistant = page.getByRole('complementary', { name: /ai tutor assistant/i });
     await expect(assistant).toBeVisible();
@@ -66,7 +76,7 @@ test.describe('Workspace Shell Layout and Responsiveness', () => {
 
   test('adapts cleanly to mobile viewport with drawer navigation', async ({ page }) => {
     await page.setViewportSize({ width: 375, height: 667 });
-    await page.goto('/app');
+    await page.goto('/learn');
 
     // Desktop sidebar should be hidden
     const desktopNav = page.getByLabel('Navigation sidebar');
@@ -79,7 +89,7 @@ test.describe('Workspace Shell Layout and Responsiveness', () => {
     // Open mobile drawer
     await menuBtn.click();
     await expect(page.getByText('Navigation')).toBeVisible();
-    await expect(page.getByRole('button', { name: 'Study Materials' })).toBeVisible();
+    await expect(page.getByRole('button', { name: 'Home / My Materials' })).toBeVisible();
 
     // Close drawer
     await page.getByRole('button', { name: /close navigation/i }).click();
@@ -87,7 +97,7 @@ test.describe('Workspace Shell Layout and Responsiveness', () => {
   });
 
   test('supports keyboard skip link navigation', async ({ page }) => {
-    await page.goto('/app');
+    await page.goto('/learn');
 
     // Press Tab once to focus skip link
     await page.keyboard.press('Tab');

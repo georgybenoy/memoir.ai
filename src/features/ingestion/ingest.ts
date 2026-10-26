@@ -7,6 +7,7 @@ import { validateUploadFile } from './validate';
 import { extractDocumentText, IngestionError } from './extract-text';
 import { normalizeDocument } from './normalize';
 import { chunkDocument, type ChunkOptions } from './chunk';
+import { computeContentHash, evaluateBlobStorage } from './duplicates';
 import {
   type IngestFileInput,
   type IngestionProgress,
@@ -15,6 +16,7 @@ import {
 
 export interface IngestOptions {
   file: IngestFileInput;
+  documentId?: string;
   subjectId?: string;
   chunkOptions?: ChunkOptions;
   allowDuplicate?: boolean;
@@ -34,13 +36,15 @@ function yieldToMain(): Promise<void> {
  * Check if a document with the identical content hash already exists in IndexedDB.
  */
 export async function findDuplicateDocument(
-  contentHash: string,
+  hash: string,
   dbName = DB_NAME,
 ): Promise<DocumentRecord | null> {
   try {
     const db = await openDatabase(dbName);
     const allDocs = await db.getAll('documents');
-    const match = allDocs.find((doc) => doc.contentHash === contentHash);
+    const match = allDocs.find(
+      (doc) => doc.fileHash === hash || doc.contentHash === hash,
+    );
     return match ?? null;
   } catch (err) {
     console.warn('Failed to query documents for duplicates:', err);
@@ -180,8 +184,13 @@ export async function ingestDocument(options: IngestOptions): Promise<IngestResu
       message: 'Dividing document into semantic study chunks...',
     });
 
-    const documentId = generateId();
+    const contentHash = await computeContentHash(normalized.text);
+    const documentId = options.documentId ?? generateId();
     const chunks = await chunkDocument(normalized, documentId, chunkOptions);
+    for (const chunk of chunks) {
+      chunk.materialId = documentId;
+      chunk.contentVersion = contentHash;
+    }
 
     await yieldToMain();
     if (signal?.aborted) {
@@ -197,15 +206,21 @@ export async function ingestDocument(options: IngestOptions): Promise<IngestResu
     });
 
     const now = nowIso();
+    const blobDecision = evaluateBlobStorage(file.size);
+
     const documentRecord: DocumentRecord = {
       id: documentId,
+      materialId: documentId,
       subjectId,
       filename: file.name,
       fileType: validation.fileType!,
       fileSize: file.size,
       extractedText: normalized.text,
       analysisStatus: 'pending',
-      contentHash: fileHash,
+      fileHash,
+      contentHash,
+      contentVersion: contentHash,
+      promptVersion: '1.0',
       metadata: {
         originalFilename: file.name,
         fileSize: file.size,
@@ -213,6 +228,7 @@ export async function ingestDocument(options: IngestOptions): Promise<IngestResu
         mimeType: file.type || validation.mimeType,
         lastModified: file.lastModified,
         fileHash,
+        contentHash,
         pageCount: extracted.metadata.pageCount,
         rawCharCount: extracted.rawText.length,
         normalizedCharCount: normalized.normalizedCharCount,
@@ -224,10 +240,21 @@ export async function ingestDocument(options: IngestOptions): Promise<IngestResu
     };
 
     // Atomic transaction: document + all chunks write together or rollback completely
+    const storeNames: Array<'documents' | 'documentChunks' | 'materialFiles'> = ['documents', 'documentChunks'];
     await runTransaction(
-      ['documents', 'documentChunks'],
+      storeNames,
       'readwrite',
       async (tx) => {
+        // If replacing an existing document, delete previous chunks first
+        if (options.documentId) {
+          const chunkStore = tx.objectStore('documentChunks');
+          const index = chunkStore.index('by-document');
+          const oldChunks = await index.getAll(options.documentId);
+          for (const oldC of oldChunks) {
+            await chunkStore.delete(oldC.id);
+          }
+        }
+
         await tx.objectStore('documents').put(documentRecord);
         const chunkStore = tx.objectStore('documentChunks');
         for (const chunk of chunks) {
@@ -236,6 +263,25 @@ export async function ingestDocument(options: IngestOptions): Promise<IngestResu
       },
       dbName,
     );
+
+    // Persist original file blob if within size cap (10 MiB)
+    if (blobDecision.storeBlob) {
+      try {
+        const db = await openDatabase(dbName);
+        if (db.objectStoreNames.contains('materialFiles')) {
+          await db.put('materialFiles', {
+            id: documentId,
+            filename: file.name,
+            mimeType: file.type || validation.mimeType || 'application/octet-stream',
+            size: file.size,
+            blob: new Blob([buffer], { type: file.type || validation.mimeType }),
+            createdAt: now,
+          });
+        }
+      } catch (err) {
+        console.warn('Failed to store raw material file blob:', err);
+      }
+    }
 
     onProgress?.({
       stage: 'completed',

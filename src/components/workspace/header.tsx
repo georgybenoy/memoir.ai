@@ -14,6 +14,7 @@ import {
 import { useWorkspaceStore } from '@/lib/state/workspace-store';
 import { useSaveStatusStore } from '@/lib/state/save-status-store';
 import { Button } from '@/components/ui/button';
+import { ThemeToggle } from '@/components/theme';
 
 export interface WorkspaceHeaderProps {
   onMobileNavToggle?: () => void;
@@ -146,13 +147,8 @@ export const WorkspaceHeader: React.FC<WorkspaceHeaderProps> = ({ onMobileNavTog
           )}
         </div>
 
-        {/* Theme badge (locked Dark per DESIGN_DOC §4.1) */}
-        <span
-          className="hidden lg:inline-flex items-center rounded-full border border-[var(--border-color)] bg-[var(--surface-raised)] px-2 py-0.5 text-[11px] font-medium text-[var(--text-muted)]"
-          aria-label="Theme: Dark mode active"
-        >
-          Dark
-        </span>
+        {/* Accessible Theme Toggle (Light / Dark / System) */}
+        <ThemeToggle />
 
         {/* Assistant panel toggle */}
         <Button

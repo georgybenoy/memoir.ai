@@ -62,7 +62,8 @@ export class HybridAnswerEvaluator implements AnswerEvaluator {
     const createdAt = nowIso();
 
     // Construct reference text for semantic embedding comparison
-    const keyPointsText = input.question.expectedKeyPoints.join('. ');
+    const keyPoints = input.question.expectedKeyPoints ?? [];
+    const keyPointsText = keyPoints.join('. ');
     const explanationText = input.concept.canonicalExplanation ?? input.concept.summary;
     const referenceText = `${keyPointsText}. ${explanationText}`.trim();
 
@@ -148,6 +149,8 @@ export class HybridAnswerEvaluator implements AnswerEvaluator {
       sessionId: input.sessionId,
       questionId: input.question.id,
       conceptId: input.concept.id,
+      materialId: input.concept.materialId ?? input.question.materialId,
+      unitId: input.concept.unitId ?? input.question.unitId,
       answerText: input.answerText,
       confidence: mapNumericConfidence(input.confidence),
       semanticScore,

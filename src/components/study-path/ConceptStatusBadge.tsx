@@ -48,16 +48,16 @@ export const STATUS_CONFIG: Record<
   review_due: {
     label: 'Review Due',
     icon: RefreshCw,
-    bgColor: 'bg-amber-500/15',
-    textColor: 'text-amber-400',
-    borderColor: 'border-amber-500/30',
+    bgColor: 'bg-[var(--surface-raised)]',
+    textColor: 'text-[var(--warning)]',
+    borderColor: 'border-[var(--border-color)]',
   },
   mastered: {
     label: 'Mastered',
     icon: CheckCircle2,
-    bgColor: 'bg-emerald-500/15',
-    textColor: 'text-emerald-400',
-    borderColor: 'border-emerald-500/30',
+    bgColor: 'bg-[var(--surface-raised)]',
+    textColor: 'text-[var(--success)]',
+    borderColor: 'border-[var(--border-color)]',
   },
 };
 

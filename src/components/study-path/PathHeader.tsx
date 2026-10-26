@@ -102,7 +102,7 @@ export function PathHeader({
         </div>
 
         <div className="flex items-center gap-2 rounded-md border border-border-subtle bg-surface-card p-2 text-xs">
-          <RefreshCw className="h-4 w-4 text-amber-400" aria-hidden="true" />
+          <RefreshCw className="h-4 w-4 text-[var(--warning)]" aria-hidden="true" />
           <div>
             <span className="font-semibold text-text-primary">{statusCounts.review_due}</span>
             <span className="ml-1 text-text-muted">Review Due</span>
@@ -110,7 +110,7 @@ export function PathHeader({
         </div>
 
         <div className="flex items-center gap-2 rounded-md border border-border-subtle bg-surface-card p-2 text-xs">
-          <CheckCircle2 className="h-4 w-4 text-emerald-400" aria-hidden="true" />
+          <CheckCircle2 className="h-4 w-4 text-[var(--success)]" aria-hidden="true" />
           <div>
             <span className="font-semibold text-text-primary">{statusCounts.mastered}</span>
             <span className="ml-1 text-text-muted">Mastered</span>

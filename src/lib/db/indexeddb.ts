@@ -14,6 +14,10 @@ import {
   type SpacedRepetitionStateRecord,
   type ConversationMessageRecord,
   type LearningEventRecord,
+  type LearningUnitRecord,
+  type MaterialProcessingRecord,
+  type MaterialFileRecord,
+  type WorkflowStateRecord,
 } from '@/types/domain';
 import { SCHEMA_VERSION } from './schema';
 import { runMigrations, MIGRATIONS, type Migration } from './migrations';
@@ -39,6 +43,8 @@ export interface EduMentorDBSchema {
     indexes: {
       'by-created': string;
       'by-subject': string;
+      'by-file-hash': string;
+      'by-content-hash': string;
     };
   };
   documentChunks: {
@@ -47,6 +53,7 @@ export interface EduMentorDBSchema {
     indexes: {
       'by-document': string;
       'by-doc-index': [string, number];
+      'by-material': string;
     };
   };
   subjects: {
@@ -62,6 +69,8 @@ export interface EduMentorDBSchema {
     indexes: {
       'by-subject': string;
       'by-status': string;
+      'by-material': string;
+      'by-unit': string;
     };
   };
   conceptDependencies: {
@@ -79,6 +88,8 @@ export interface EduMentorDBSchema {
     indexes: {
       'by-updated': string;
       'by-status': string;
+      'by-material': string;
+      'by-unit': string;
     };
   };
   studyPathItems: {
@@ -94,6 +105,7 @@ export interface EduMentorDBSchema {
     value: RecallQuestionRecord;
     indexes: {
       'by-concept': string;
+      'by-material': string;
     };
   };
   recallAttempts: {
@@ -103,6 +115,7 @@ export interface EduMentorDBSchema {
       'by-concept': string;
       'by-session': string;
       'by-created': string;
+      'by-material': string;
     };
   };
   masteryStates: {
@@ -137,6 +150,38 @@ export interface EduMentorDBSchema {
       'by-created': string;
     };
   };
+  learningUnits: {
+    key: string;
+    value: LearningUnitRecord;
+    indexes: {
+      'by-material': string;
+      'by-material-order': [string, number];
+      'by-updated': string;
+    };
+  };
+  processing: {
+    key: string;
+    value: MaterialProcessingRecord;
+    indexes: {
+      'by-stage': string;
+      'by-updated': string;
+    };
+  };
+  materialFiles: {
+    key: string;
+    value: MaterialFileRecord;
+    indexes: {
+      'by-created': string;
+    };
+  };
+  workflowState: {
+    key: string; // materialId
+    value: WorkflowStateRecord;
+    indexes: {
+      'by-material': string;
+      'by-updated': string;
+    };
+  };
 }
 
 export type StoreName =
@@ -153,7 +198,11 @@ export type StoreName =
   | 'masteryStates'
   | 'spacedRepetitionStates'
   | 'conversationMessages'
-  | 'learningEvents';
+  | 'learningEvents'
+  | 'learningUnits'
+  | 'processing'
+  | 'materialFiles'
+  | 'workflowState';
 
 const _openDatabases = new Map<string, IDBPDatabase<EduMentorDBSchema>>();
 
@@ -179,11 +228,11 @@ export async function openDatabase(
 
   try {
     const db = await openDB<EduMentorDBSchema>(dbName, version, {
-      upgrade(db, oldVersion, newVersion, transaction) {
+      async upgrade(db, oldVersion, newVersion, transaction) {
         // Prevent unhandled rejection on tx.done when tx.abort() is called during migration failure
         transaction.done.catch(() => {});
         try {
-          runMigrations(
+          await runMigrations(
             db as unknown as IDBPDatabase<unknown>,
             oldVersion,
             newVersion ?? version,
@@ -207,7 +256,15 @@ export async function openDatabase(
         }
       },
       blocked() {
-        console.warn('EduMentor IndexedDB upgrade blocked by older connection');
+        const msg = 'EduMentor IndexedDB upgrade blocked by older connection in another tab or window.';
+        console.warn(msg);
+        if (typeof window !== 'undefined') {
+          window.dispatchEvent(
+            new CustomEvent('edumentor:db-blocked', {
+              detail: { message: msg },
+            }),
+          );
+        }
       },
       blocking() {
         console.warn('EduMentor IndexedDB connection is blocking an upgrade, closing');

@@ -60,6 +60,9 @@ export async function createBackupEnvelope(
     spacedRepetitionStates,
     conversationMessages,
     learningEvents,
+    learningUnits,
+    processing,
+    workflowState,
   ] = await Promise.all([
     repos.documents.list(),
     repos.chunks.list(),
@@ -74,6 +77,9 @@ export async function createBackupEnvelope(
     repos.spacedRepetition.list(),
     repos.messages.list(),
     repos.events.list(),
+    repos.learningUnits.list(),
+    repos.processing.list(),
+    repos.workflowState.list(),
   ]);
 
   return {
@@ -95,6 +101,9 @@ export async function createBackupEnvelope(
     spacedRepetitionStates,
     conversationMessages,
     learningEvents,
+    learningUnits,
+    processing,
+    workflowState,
     preferences: workspace.preferences,
   };
 }
@@ -309,6 +318,9 @@ export function validateBackupFile(
       spacedRepetitionStates: envelope.spacedRepetitionStates.length,
       conversationMessages: envelope.conversationMessages.length,
       learningEvents: envelope.learningEvents?.length ?? 0,
+      learningUnits: envelope.learningUnits?.length ?? 0,
+      processing: envelope.processing?.length ?? 0,
+      workflowState: envelope.workflowState?.length ?? 0,
     },
   };
 
@@ -362,8 +374,67 @@ export async function executeImport(
         repos.spacedRepetition.clear(),
         repos.messages.clear(),
         repos.events.clear(),
+        repos.learningUnits.clear(),
+        repos.processing.clear(),
+        repos.materialFiles.clear(),
         repos.workspace.clear(),
       ]);
+
+      const unitsToInsert = [...(envelope.learningUnits ?? [])];
+      const procToInsert = [...(envelope.processing ?? [])];
+
+      // v1 compatibility: synthesize learning units and processing records if missing in legacy v1
+      if (!envelope.learningUnits && envelope.schemaVersion < 2 && envelope.documents.length > 0) {
+        for (const doc of envelope.documents) {
+          const docConcepts = envelope.concepts.filter(
+            (c) =>
+              c.materialId === doc.id ||
+              (c.sourceChunkIds ?? []).some((cid) =>
+                envelope.documentChunks.find((ch) => ch.id === cid)?.documentId === doc.id,
+              ),
+          );
+          if (docConcepts.length > 0) {
+            const unitId = `unit-${doc.id}-1`;
+            const docTitle = (doc.metadata?.title as string) || doc.filename || 'Document';
+            unitsToInsert.push({
+              id: unitId,
+              materialId: doc.id,
+              order: 0,
+              title: `${docTitle} - Core Concepts`,
+              summary: docConcepts[0]?.summary || 'Migrated core concepts unit',
+              conceptIds: docConcepts.map((c) => c.id),
+              sourceChunkIds: Array.from(
+                new Set(docConcepts.flatMap((c) => c.sourceChunkIds || [])),
+              ),
+              contentVersion: doc.contentVersion || 'v1',
+              createdAt: doc.createdAt || nowISO(),
+              updatedAt: nowISO(),
+            });
+            for (const c of docConcepts) {
+              if (!c.unitId) c.unitId = unitId;
+              if (!c.materialId) c.materialId = doc.id;
+            }
+          }
+
+          procToInsert.push({
+            id: doc.id,
+            materialId: doc.id,
+            stage: 'COMPLETE',
+            progressPercent: 100,
+            message: 'Imported complete material',
+            fileHash: doc.fileHash || '',
+            contentHash: doc.contentHash || '',
+            contentVersion: doc.contentVersion || 'v1',
+            counts: {
+              totalChunks: envelope.documentChunks.filter((ch) => ch.documentId === doc.id).length,
+              extractedConcepts: docConcepts.length,
+              totalUnits: docConcepts.length > 0 ? 1 : 0,
+            },
+            createdAt: doc.createdAt || nowISO(),
+            updatedAt: nowISO(),
+          });
+        }
+      }
 
       // Insert new records
       await Promise.all([
@@ -381,6 +452,8 @@ export async function executeImport(
         repos.spacedRepetition.putMany(envelope.spacedRepetitionStates),
         repos.messages.putMany(envelope.conversationMessages),
         envelope.learningEvents ? repos.events.putMany(envelope.learningEvents) : Promise.resolve(),
+        unitsToInsert.length > 0 ? repos.learningUnits.putMany(unitsToInsert) : Promise.resolve(),
+        procToInsert.length > 0 ? repos.processing.putMany(procToInsert) : Promise.resolve(),
       ]);
 
       return {
@@ -390,6 +463,7 @@ export async function executeImport(
           documentChunks: envelope.documentChunks.length,
           concepts: envelope.concepts.length,
           recallAttempts: envelope.recallAttempts.length,
+          learningUnits: unitsToInsert.length,
         },
         updatedCount: 0,
         copiedCount: 0,
@@ -423,6 +497,8 @@ export async function executeImport(
     curSr,
     curMessages,
     curEvents,
+    curUnits,
+    curProc,
   ] = await Promise.all([
     repos.documents.list(),
     repos.chunks.list(),
@@ -437,6 +513,8 @@ export async function executeImport(
     repos.spacedRepetition.list(),
     repos.messages.list(),
     repos.events.list(),
+    repos.learningUnits.list(),
+    repos.processing.list(),
   ]);
 
   let skippedCount = 0;
@@ -602,6 +680,50 @@ export async function executeImport(
     await applyStoreRecords(curEvents, envelope.learningEvents, (e) => repos.events.put(e));
   }
 
+  // Learning Units (remap materialId and conceptIds)
+  let unitCount = 0;
+  if (envelope.learningUnits) {
+    unitCount = await applyStoreRecords(
+      curUnits,
+      envelope.learningUnits,
+      (u) => repos.learningUnits.put(u),
+      (u, map) => ({
+        ...u,
+        materialId: map.get(u.materialId) ?? u.materialId,
+        conceptIds: u.conceptIds.map((cid) => map.get(cid) ?? cid),
+        sourceChunkIds: u.sourceChunkIds.map((cid) => map.get(cid) ?? cid),
+      }),
+    );
+  }
+
+  // Processing Records (remap materialId)
+  if (envelope.processing) {
+    await applyStoreRecords(
+      curProc,
+      envelope.processing,
+      (p) => repos.processing.put(p),
+      (p, map) => ({
+        ...p,
+        materialId: map.get(p.materialId) ?? p.materialId,
+      }),
+    );
+  }
+
+  // Workflow State Records (remap materialId)
+  if (envelope.workflowState) {
+    const curWf = await repos.workflowState.list();
+    await applyStoreRecords(
+      curWf,
+      envelope.workflowState,
+      (w) => repos.workflowState.put(w),
+      (w, map) => ({
+        ...w,
+        id: map.get(w.materialId) ?? w.materialId,
+        materialId: map.get(w.materialId) ?? w.materialId,
+      }),
+    );
+  }
+
   return {
     mode,
     importedCounts: {
@@ -609,6 +731,7 @@ export async function executeImport(
       documentChunks: chunkCount,
       concepts: conceptCount,
       recallAttempts: attemptCount,
+      learningUnits: unitCount,
     },
     updatedCount,
     copiedCount,

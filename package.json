@@ -15,7 +15,8 @@
     "check:bundle": "node scripts/check-no-secrets-in-client.mjs",
     "check:persistence": "node scripts/check-no-server-persistence.mjs",
     "check-contrast": "node scripts/check-contrast.mjs",
-    "verify": "npm run lint && npm run typecheck && npm run test && npm run check:bundle && npm run check:persistence && npm run check-contrast && npm run build && npm run test:e2e",
+    "check:colors": "node scripts/check-hardcoded-colors.mjs",
+    "verify": "npm run lint && npm run typecheck && npm run test && npm run check:bundle && npm run check:persistence && npm run check-contrast && npm run check:colors && npm run build && npm run test:e2e",
     "format": "prettier --write ."
   },
   "dependencies": {

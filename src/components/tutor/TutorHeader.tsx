@@ -130,12 +130,12 @@ export const TutorHeader: React.FC<TutorHeaderProps> = ({
           {isDocumentMode ? (
             <div
               title={documentName ? `Grounded in ${documentName}` : 'Grounded in uploaded study notes'}
-              className="inline-flex items-center gap-1.5 px-3 py-1 rounded-lg text-xs font-medium bg-[var(--success)]/10 text-[var(--success)] border border-[var(--success)]/30"
+              className="inline-flex items-center gap-1.5 px-3 py-1 rounded-lg text-xs font-medium bg-[var(--surface-raised)] text-[var(--success)] border border-[var(--border-color)]"
             >
               <FileText className="h-3.5 w-3.5" aria-hidden="true" />
               <span>Grounded in notes</span>
               {documentName && (
-                <span className="hidden md:inline font-mono text-[10px] opacity-80 max-w-[150px] truncate">
+                <span className="hidden md:inline font-mono text-[10px] text-[var(--text-secondary)] max-w-[150px] truncate">
                   ({documentName})
                 </span>
               )}
@@ -143,7 +143,7 @@ export const TutorHeader: React.FC<TutorHeaderProps> = ({
           ) : (
             <div
               title="Not based on uploaded notes"
-              className="inline-flex items-center gap-1.5 px-3 py-1 rounded-lg text-xs font-medium bg-[var(--warning)]/10 text-[var(--warning)] border border-[var(--warning)]/30"
+              className="inline-flex items-center gap-1.5 px-3 py-1 rounded-lg text-xs font-medium bg-[var(--surface-raised)] text-[var(--warning)] border border-[var(--border-color)]"
             >
               <Globe className="h-3.5 w-3.5" aria-hidden="true" />
               <span>Topic mode (Not based on notes)</span>

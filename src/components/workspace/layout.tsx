@@ -12,6 +12,7 @@ import { bootstrapStorage } from '@/lib/db/bootstrap';
 import { X, Clock, AlertTriangle } from 'lucide-react';
 import Link from 'next/link';
 import { Button } from '@/components/ui/button';
+import { ThemeToggle } from '@/components/theme';
 import { useReviewStore } from '@/lib/state/review-store';
 
 export interface WorkspaceLayoutProps {
@@ -196,6 +197,10 @@ export const WorkspaceLayout: React.FC<WorkspaceLayoutProps> = ({ children }) =>
                 onMobileItemClick={() => setMobileNavOpen(false)}
                 className="w-full flex-1 border-r-0"
               />
+              <div className="p-3 border-t border-[var(--border-color)] flex items-center justify-between">
+                <span className="text-xs font-semibold text-[var(--text-secondary)]">Theme</span>
+                <ThemeToggle />
+              </div>
             </div>
           </div>
         )}

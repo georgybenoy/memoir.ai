@@ -15,6 +15,11 @@ import {
   type ConversationMessageRecord,
   type LearningEventRecord,
   type ConceptStatus,
+  type LearningUnitRecord,
+  type MaterialProcessingRecord,
+  type MaterialFileRecord,
+  type ProcessingStage,
+  type WorkflowStateRecord,
 } from '@/types/domain';
 import { nowISO } from '@/lib/utils/clock';
 import { openDatabase, DB_NAME, type StoreName, type EduMentorDBSchema, safeWrite } from '../indexeddb';
@@ -34,6 +39,10 @@ import {
   type ISpacedRepetitionStateRepository,
   type IConversationMessageRepository,
   type ILearningEventRepository,
+  type ILearningUnitRepository,
+  type IMaterialProcessingRepository,
+  type IMaterialFileRepository,
+  type IWorkflowStateRepository,
   type StorageRepositories,
 } from './types';
 
@@ -160,6 +169,23 @@ export class DocumentIdbRepository
     const items = await db.getAllFromIndex('documents', 'by-subject', subjectId);
     return items ?? [];
   }
+
+  async getByFileHash(fileHash: string): Promise<DocumentRecord | null> {
+    const db = await openDatabase(this.dbName);
+    const item = await db.getFromIndex('documents', 'by-file-hash', fileHash);
+    return item ?? null;
+  }
+
+  async getByContentHash(contentHash: string): Promise<DocumentRecord | null> {
+    const db = await openDatabase(this.dbName);
+    const item = await db.getFromIndex('documents', 'by-content-hash', contentHash);
+    return item ?? null;
+  }
+
+  async findByFilename(filename: string): Promise<DocumentRecord[]> {
+    const all = await this.list();
+    return all.filter((d) => d.filename === filename);
+  }
 }
 
 export class DocumentChunkIdbRepository
@@ -173,6 +199,12 @@ export class DocumentChunkIdbRepository
   async listByDocument(documentId: string): Promise<DocumentChunkRecord[]> {
     const db = await openDatabase(this.dbName);
     const items = await db.getAllFromIndex('documentChunks', 'by-document', documentId);
+    return (items ?? []).sort((a, b) => a.chunkIndex - b.chunkIndex);
+  }
+
+  async listByMaterial(materialId: string): Promise<DocumentChunkRecord[]> {
+    const db = await openDatabase(this.dbName);
+    const items = await db.getAllFromIndex('documentChunks', 'by-material', materialId);
     return (items ?? []).sort((a, b) => a.chunkIndex - b.chunkIndex);
   }
 
@@ -223,6 +255,18 @@ export class ConceptIdbRepository
     const items = await db.getAllFromIndex('concepts', 'by-status', status);
     return items ?? [];
   }
+
+  async listByMaterial(materialId: string): Promise<ConceptRecord[]> {
+    const db = await openDatabase(this.dbName);
+    const items = await db.getAllFromIndex('concepts', 'by-material', materialId);
+    return items ?? [];
+  }
+
+  async listByUnit(unitId: string): Promise<ConceptRecord[]> {
+    const db = await openDatabase(this.dbName);
+    const items = await db.getAllFromIndex('concepts', 'by-unit', unitId);
+    return items ?? [];
+  }
 }
 
 export class ConceptDependencyIdbRepository
@@ -270,6 +314,12 @@ export class StudySessionIdbRepository
     const active = all.filter((s) => !s.endedAt);
     return active.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))[0] ?? null;
   }
+
+  async listByMaterial(materialId: string): Promise<StudySessionRecord[]> {
+    const db = await openDatabase(this.dbName);
+    const items = await db.getAllFromIndex('studySessions', 'by-material', materialId);
+    return items ?? [];
+  }
 }
 
 export class StudyPathItemIdbRepository
@@ -299,6 +349,11 @@ export class RecallQuestionIdbRepository
     const db = await openDatabase(this.dbName);
     return (await db.getAllFromIndex('recallQuestions', 'by-concept', conceptId)) ?? [];
   }
+
+  async listByMaterial(materialId: string): Promise<RecallQuestionRecord[]> {
+    const db = await openDatabase(this.dbName);
+    return (await db.getAllFromIndex('recallQuestions', 'by-material', materialId)) ?? [];
+  }
 }
 
 export class RecallAttemptIdbRepository
@@ -317,6 +372,11 @@ export class RecallAttemptIdbRepository
   async listBySession(sessionId: string): Promise<RecallAttemptRecord[]> {
     const db = await openDatabase(this.dbName);
     return (await db.getAllFromIndex('recallAttempts', 'by-session', sessionId)) ?? [];
+  }
+
+  async listByMaterial(materialId: string): Promise<RecallAttemptRecord[]> {
+    const db = await openDatabase(this.dbName);
+    return (await db.getAllFromIndex('recallAttempts', 'by-material', materialId)) ?? [];
   }
 }
 
@@ -386,6 +446,71 @@ export class LearningEventIdbRepository
   }
 }
 
+export class LearningUnitIdbRepository
+  extends BaseIdbRepository<LearningUnitRecord, 'learningUnits'>
+  implements ILearningUnitRepository
+{
+  constructor(dbName = DB_NAME) {
+    super('learningUnits', dbName);
+  }
+
+  async listByMaterial(materialId: string): Promise<LearningUnitRecord[]> {
+    const db = await openDatabase(this.dbName);
+    const items = await db.getAllFromIndex('learningUnits', 'by-material', materialId);
+    return (items ?? []).sort((a, b) => a.order - b.order);
+  }
+
+  async getByMaterialAndOrder(materialId: string, order: number): Promise<LearningUnitRecord | null> {
+    const db = await openDatabase(this.dbName);
+    const item = await db.getFromIndex('learningUnits', 'by-material-order', [materialId, order]);
+    return item ?? null;
+  }
+}
+
+export class MaterialProcessingIdbRepository
+  extends BaseIdbRepository<MaterialProcessingRecord, 'processing'>
+  implements IMaterialProcessingRepository
+{
+  constructor(dbName = DB_NAME) {
+    super('processing', dbName);
+  }
+
+  async getByMaterial(materialId: string): Promise<MaterialProcessingRecord | null> {
+    return this.get(materialId);
+  }
+
+  async listByStage(stage: ProcessingStage): Promise<MaterialProcessingRecord[]> {
+    const db = await openDatabase(this.dbName);
+    return (await db.getAllFromIndex('processing', 'by-stage', stage)) ?? [];
+  }
+}
+
+export class MaterialFileIdbRepository
+  extends BaseIdbRepository<MaterialFileRecord, 'materialFiles'>
+  implements IMaterialFileRepository
+{
+  constructor(dbName = DB_NAME) {
+    super('materialFiles', dbName);
+  }
+
+  async getByMaterial(materialId: string): Promise<MaterialFileRecord | null> {
+    return this.get(materialId);
+  }
+}
+
+export class WorkflowStateIdbRepository
+  extends BaseIdbRepository<WorkflowStateRecord, 'workflowState'>
+  implements IWorkflowStateRepository
+{
+  constructor(dbName = DB_NAME) {
+    super('workflowState', dbName);
+  }
+
+  async getByMaterial(materialId: string): Promise<WorkflowStateRecord | null> {
+    return this.get(materialId);
+  }
+}
+
 /** Factory that creates full IndexedDB repositories container */
 export function createIdbRepositories(dbName = DB_NAME): StorageRepositories {
   return {
@@ -403,5 +528,9 @@ export function createIdbRepositories(dbName = DB_NAME): StorageRepositories {
     spacedRepetition: new SpacedRepetitionStateIdbRepository(dbName),
     messages: new ConversationMessageIdbRepository(dbName),
     events: new LearningEventIdbRepository(dbName),
+    learningUnits: new LearningUnitIdbRepository(dbName),
+    processing: new MaterialProcessingIdbRepository(dbName),
+    materialFiles: new MaterialFileIdbRepository(dbName),
+    workflowState: new WorkflowStateIdbRepository(dbName),
   };
 }

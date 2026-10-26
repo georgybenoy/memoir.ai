@@ -15,6 +15,11 @@ import {
   type ConversationMessageRecord,
   type LearningEventRecord,
   type ConceptStatus,
+  type LearningUnitRecord,
+  type MaterialProcessingRecord,
+  type MaterialFileRecord,
+  type ProcessingStage,
+  type WorkflowStateRecord,
 } from '@/types/domain';
 import { nowISO } from '@/lib/utils/clock';
 import { SCHEMA_VERSION } from '../schema';
@@ -33,6 +38,10 @@ import {
   type ISpacedRepetitionStateRepository,
   type IConversationMessageRepository,
   type ILearningEventRepository,
+  type ILearningUnitRepository,
+  type IMaterialProcessingRepository,
+  type IMaterialFileRepository,
+  type IWorkflowStateRepository,
   type StorageRepositories,
 } from './types';
 
@@ -125,6 +134,21 @@ export class DocumentMemoryRepository
     if (!subjectId) return all;
     return all.filter((d) => d.subjectId === subjectId);
   }
+
+  async getByFileHash(fileHash: string): Promise<DocumentRecord | null> {
+    const all = await this.list();
+    return all.find((d) => d.fileHash === fileHash) ?? null;
+  }
+
+  async getByContentHash(contentHash: string): Promise<DocumentRecord | null> {
+    const all = await this.list();
+    return all.find((d) => d.contentHash === contentHash) ?? null;
+  }
+
+  async findByFilename(filename: string): Promise<DocumentRecord[]> {
+    const all = await this.list();
+    return all.filter((d) => d.filename === filename);
+  }
 }
 
 export class DocumentChunkMemoryRepository
@@ -135,6 +159,13 @@ export class DocumentChunkMemoryRepository
     const all = await this.list();
     return all
       .filter((c) => c.documentId === documentId)
+      .sort((a, b) => a.chunkIndex - b.chunkIndex);
+  }
+
+  async listByMaterial(materialId: string): Promise<DocumentChunkRecord[]> {
+    const all = await this.list();
+    return all
+      .filter((c) => c.materialId === materialId)
       .sort((a, b) => a.chunkIndex - b.chunkIndex);
   }
 
@@ -173,6 +204,16 @@ export class ConceptMemoryRepository
     const all = await this.list();
     return all.filter((c) => c.status === status);
   }
+
+  async listByMaterial(materialId: string): Promise<ConceptRecord[]> {
+    const all = await this.list();
+    return all.filter((c) => c.materialId === materialId);
+  }
+
+  async listByUnit(unitId: string): Promise<ConceptRecord[]> {
+    const all = await this.list();
+    return all.filter((c) => c.unitId === unitId);
+  }
 }
 
 export class ConceptDependencyMemoryRepository
@@ -206,6 +247,11 @@ export class StudySessionMemoryRepository
     const active = all.filter((s) => !s.endedAt);
     return active.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))[0] ?? null;
   }
+
+  async listByMaterial(materialId: string): Promise<StudySessionRecord[]> {
+    const all = await this.list();
+    return all.filter((s) => s.materialId === materialId);
+  }
 }
 
 export class StudyPathItemMemoryRepository
@@ -228,6 +274,11 @@ export class RecallQuestionMemoryRepository
     const all = await this.list();
     return all.filter((q) => q.conceptId === conceptId);
   }
+
+  async listByMaterial(materialId: string): Promise<RecallQuestionRecord[]> {
+    const all = await this.list();
+    return all.filter((q) => q.materialId === materialId);
+  }
 }
 
 export class RecallAttemptMemoryRepository
@@ -242,6 +293,11 @@ export class RecallAttemptMemoryRepository
   async listBySession(sessionId: string): Promise<RecallAttemptRecord[]> {
     const all = await this.list();
     return all.filter((a) => a.sessionId === sessionId);
+  }
+
+  async listByMaterial(materialId: string): Promise<RecallAttemptRecord[]> {
+    const all = await this.list();
+    return all.filter((a) => a.materialId === materialId);
   }
 }
 
@@ -292,6 +348,57 @@ export class LearningEventMemoryRepository
   }
 }
 
+export class LearningUnitMemoryRepository
+  extends BaseMemoryRepository<LearningUnitRecord>
+  implements ILearningUnitRepository
+{
+  async listByMaterial(materialId: string): Promise<LearningUnitRecord[]> {
+    const all = await this.list();
+    return all
+      .filter((u) => u.materialId === materialId)
+      .sort((a, b) => a.order - b.order);
+  }
+
+  async getByMaterialAndOrder(materialId: string, order: number): Promise<LearningUnitRecord | null> {
+    const all = await this.list();
+    return all.find((u) => u.materialId === materialId && u.order === order) ?? null;
+  }
+}
+
+export class MaterialProcessingMemoryRepository
+  extends BaseMemoryRepository<MaterialProcessingRecord>
+  implements IMaterialProcessingRepository
+{
+  async getByMaterial(materialId: string): Promise<MaterialProcessingRecord | null> {
+    const all = await this.list();
+    return all.find((p) => p.materialId === materialId) ?? null;
+  }
+
+  async listByStage(stage: ProcessingStage): Promise<MaterialProcessingRecord[]> {
+    const all = await this.list();
+    return all.filter((p) => p.stage === stage);
+  }
+}
+
+export class MaterialFileMemoryRepository
+  extends BaseMemoryRepository<MaterialFileRecord>
+  implements IMaterialFileRepository
+{
+  async getByMaterial(materialId: string): Promise<MaterialFileRecord | null> {
+    return this.get(materialId);
+  }
+}
+
+export class WorkflowStateMemoryRepository
+  extends BaseMemoryRepository<WorkflowStateRecord>
+  implements IWorkflowStateRepository
+{
+  async getByMaterial(materialId: string): Promise<WorkflowStateRecord | null> {
+    const all = await this.list();
+    return all.find((w) => w.materialId === materialId) ?? null;
+  }
+}
+
 export function createMemoryRepositories(): StorageRepositories {
   return {
     workspace: new WorkspaceMemoryRepository(),
@@ -308,5 +415,9 @@ export function createMemoryRepositories(): StorageRepositories {
     spacedRepetition: new SpacedRepetitionStateMemoryRepository(),
     messages: new ConversationMessageMemoryRepository(),
     events: new LearningEventMemoryRepository(),
+    learningUnits: new LearningUnitMemoryRepository(),
+    processing: new MaterialProcessingMemoryRepository(),
+    materialFiles: new MaterialFileMemoryRepository(),
+    workflowState: new WorkflowStateMemoryRepository(),
   };
 }

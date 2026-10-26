@@ -98,6 +98,9 @@ export async function clearAllLocalData(dbName = DB_NAME): Promise<WorkspaceReco
         'spacedRepetitionStates',
         'conversationMessages',
         'learningEvents',
+        'learningUnits',
+        'processing',
+        'materialFiles',
       ];
       const tx = db.transaction(storeNames, 'readwrite');
       for (const s of storeNames) {

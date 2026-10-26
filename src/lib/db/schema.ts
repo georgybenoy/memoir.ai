@@ -1,6 +1,6 @@
 import { z } from 'zod';
 
-export const SCHEMA_VERSION = 1;
+export const SCHEMA_VERSION = 3;
 export const MAX_BACKUP_SIZE_BYTES = 50 * 1024 * 1024; // 50 MB
 export const MAX_RECORDS_PER_STORE = 10_000;
 export const APP_VERSION = '0.1.0';
@@ -41,6 +41,7 @@ export const WorkspacePreferencesSchema = z
     difficulty: z.enum(['beginner', 'intermediate', 'advanced']),
     reducedMotion: z.boolean(),
     reviewNotifications: z.boolean().optional(),
+    theme: z.enum(['light', 'dark', 'system']).optional(),
   })
   .strict();
 
@@ -57,13 +58,17 @@ export const WorkspaceSchema = z
 export const DocumentSchema = z
   .object({
     id: z.string().min(1),
+    materialId: z.string().optional(),
     subjectId: z.string().optional(),
     filename: z.string().min(1),
     fileType: z.enum(['pdf', 'txt', 'md']),
     fileSize: z.number().nonnegative(),
     extractedText: z.string(),
     analysisStatus: z.enum(['pending', 'processing', 'completed', 'failed']),
+    fileHash: z.string().optional(),
     contentHash: z.string().min(1),
+    contentVersion: z.string().optional(),
+    promptVersion: z.string().optional(),
     metadata: z.record(z.unknown()).optional(),
     createdAt: z.string().min(1),
     updatedAt: z.string().min(1),
@@ -74,6 +79,7 @@ export const DocumentChunkSchema = z
   .object({
     id: z.string().min(1),
     documentId: z.string().min(1),
+    materialId: z.string().optional(),
     chunkIndex: z.number().int().nonnegative(),
     text: z.string(),
     startOffset: z.number().int().nonnegative(),
@@ -82,6 +88,7 @@ export const DocumentChunkSchema = z
     pageEnd: z.number().int().optional(),
     headingPath: z.array(z.string()).optional(),
     contentHash: z.string().min(1),
+    contentVersion: z.string().optional(),
     metadata: z.record(z.unknown()).optional(),
     createdAt: z.string().min(1),
   })
@@ -101,6 +108,8 @@ export const ConceptSchema = z
   .object({
     id: z.string().min(1),
     subjectId: z.string().optional(),
+    materialId: z.string().optional(),
+    unitId: z.string().optional(),
     title: z.string().min(1),
     summary: z.string(),
     canonicalExplanation: z.string(),
@@ -110,10 +119,82 @@ export const ConceptSchema = z
     status: z.enum(['locked', 'available', 'in_progress', 'review_due', 'mastered']),
     confidence: z.number().min(0).max(1),
     extractionOrder: z.number().int().nonnegative(),
+    contentVersion: z.string().optional(),
+    promptVersion: z.string().optional(),
+    archived: z.boolean().optional(),
     createdAt: z.string().min(1),
     updatedAt: z.string().min(1),
   })
   .strict();
+
+export const LearningUnitSchema = z
+  .object({
+    id: z.string().min(1),
+    materialId: z.string().min(1),
+    order: z.number().int().nonnegative(),
+    title: z.string().min(1),
+    summary: z.string(),
+    conceptIds: z.array(z.string()),
+    sourceChunkIds: z.array(z.string()),
+    contentVersion: z.string().min(1),
+    createdAt: z.string().min(1),
+    updatedAt: z.string().min(1),
+  })
+  .strict();
+
+export const ProcessingStageSchema = z.enum([
+  'SELECTED',
+  'VALIDATED',
+  'EXTRACTED',
+  'PREVIEWED',
+  'SAVED',
+  'ANALYZING',
+  'UNITS_BUILT',
+  'COMPLETE',
+  'FAILED',
+  'CANCELLED',
+]);
+
+export const MaterialProcessingSchema = z
+  .object({
+    id: z.string().min(1),
+    materialId: z.string().min(1),
+    stage: ProcessingStageSchema,
+    currentStage: ProcessingStageSchema.optional(),
+    progressPercent: z.number().min(0).max(100),
+    currentBatch: z.number().int().optional(),
+    totalBatches: z.number().int().optional(),
+    message: z.string(),
+    fileHash: z.string().optional(),
+    contentHash: z.string().optional(),
+    contentVersion: z.string().optional(),
+    promptVersion: z.string().optional(),
+    counts: z
+      .object({
+        totalChunks: z.number().int().optional(),
+        extractedConcepts: z.number().int().optional(),
+        totalUnits: z.number().int().optional(),
+      })
+      .optional(),
+    errorCode: z.string().optional(),
+    errorMessage: z.string().optional(),
+    retryable: z.boolean().optional(),
+    failedStage: ProcessingStageSchema.optional(),
+    analyzedBatchIndices: z.array(z.number().int()).optional(),
+    accumulatedConcepts: z.array(z.record(z.unknown())).optional(),
+    createdAt: z.string().min(1),
+    updatedAt: z.string().min(1),
+  })
+  .strict();
+
+export const MaterialFileSchema = z
+  .object({
+    id: z.string().min(1),
+    filename: z.string().min(1),
+    mimeType: z.string().min(1),
+    size: z.number().nonnegative(),
+    createdAt: z.string().min(1),
+  });
 
 export const ConceptDependencySchema = z
   .object({
@@ -131,6 +212,8 @@ export const StudySessionSchema = z
   .object({
     id: z.string().min(1),
     subjectId: z.string().optional(),
+    materialId: z.string().optional(),
+    learningUnitId: z.string().optional(),
     machineState: z.string().min(1),
     currentConceptId: z.string().optional(),
     draftAnswer: z.string().optional(),
@@ -158,12 +241,17 @@ export const RecallQuestionSchema = z
   .object({
     id: z.string().min(1),
     conceptId: z.string().min(1),
+    materialId: z.string().optional(),
+    unitId: z.string().optional(),
     prompt: z.string().min(1),
     questionStyle: z.string().min(1),
     referencePoints: z.array(z.string()),
     sourceChunkIds: z.array(z.string()),
     difficulty: z.number().int().min(1).max(5),
     expectedKeyPoints: z.array(z.string()),
+    contentVersion: z.string().optional(),
+    promptVersion: z.string().optional(),
+    archived: z.boolean().optional(),
     createdAt: z.string().min(1),
   })
   .strict();
@@ -174,6 +262,8 @@ export const RecallAttemptSchema = z
     sessionId: z.string().min(1),
     questionId: z.string().min(1),
     conceptId: z.string().min(1),
+    materialId: z.string().optional(),
+    unitId: z.string().optional(),
     answerText: z.string(),
     confidence: z.union([z.enum(['low', 'medium', 'high']), z.number()]),
     semanticScore: z.number().min(0).max(100).nullable().optional(),
@@ -191,6 +281,7 @@ export const MasteryStateSchema = z
   .object({
     id: z.string().min(1),
     conceptId: z.string().min(1),
+    materialId: z.string().optional(),
     level: z.number().int().min(0).max(4),
     percentage: z.number().min(0).max(100),
     masteryLevel: z.enum(['new', 'learning', 'familiar', 'proficient', 'mastered']).optional(),
@@ -209,6 +300,7 @@ export const SpacedRepetitionStateSchema = z
   .object({
     id: z.string().min(1),
     conceptId: z.string().min(1),
+    materialId: z.string().optional(),
     repetitions: z.number().int().nonnegative(),
     easinessFactor: z.number().min(1.3),
     intervalDays: z.number().int().nonnegative(),
@@ -240,6 +332,29 @@ export const LearningEventSchema = z
   })
   .strict();
 
+export const WorkflowSelectionSchema = z.discriminatedUnion('kind', [
+  z.object({
+    kind: z.literal('WHOLE_MATERIAL'),
+  }),
+  z.object({
+    kind: z.literal('UNITS'),
+    unitIds: z.array(z.string().min(1)).min(1),
+  }),
+]);
+export type WorkflowSelection = z.infer<typeof WorkflowSelectionSchema>;
+
+export const WorkflowStateSchema = z
+  .object({
+    id: z.string().min(1), // materialId
+    materialId: z.string().min(1),
+    selection: WorkflowSelectionSchema.default({ kind: 'WHOLE_MATERIAL' }),
+    lastChosenMode: z.enum(['study', 'recall', 'revision']).optional(),
+    lastSessionId: z.string().optional(),
+    updatedAt: z.string().min(1),
+  })
+  .strict();
+export type WorkflowStateRecord = z.infer<typeof WorkflowStateSchema>;
+
 export const BackupEnvelopeSchema = z
   .object({
     format: z.literal('edumentor-backup'),
@@ -260,6 +375,9 @@ export const BackupEnvelopeSchema = z
     spacedRepetitionStates: z.array(SpacedRepetitionStateSchema),
     conversationMessages: z.array(ConversationMessageSchema),
     learningEvents: z.array(LearningEventSchema).optional().default([]),
+    learningUnits: z.array(LearningUnitSchema).optional().default([]),
+    processing: z.array(MaterialProcessingSchema).optional().default([]),
+    workflowState: z.array(WorkflowStateSchema).optional().default([]),
     preferences: WorkspacePreferencesSchema,
   })
   .strict();

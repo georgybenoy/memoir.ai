@@ -21,6 +21,7 @@ import { Container } from '@/components/ui/container';
 import { Card, CardHeader, CardTitle, CardContent } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { TeacherAvatar } from '@/components/avatar';
+import { ThemeToggle } from '@/components/theme';
 
 const FAQ_ITEMS = [
   {
@@ -89,7 +90,7 @@ export default function LandingPage() {
           className="absolute inset-0 opacity-[0.03]"
           style={{
             backgroundImage:
-              'linear-gradient(to right, #ffffff 1px, transparent 1px), linear-gradient(to bottom, #ffffff 1px, transparent 1px)',
+              'linear-gradient(to right, var(--text-primary) 1px, transparent 1px), linear-gradient(to bottom, var(--text-primary) 1px, transparent 1px)',
             backgroundSize: '48px 48px',
           }}
         />
@@ -149,7 +150,8 @@ export default function LandingPage() {
           </nav>
 
           <div className="flex items-center gap-3">
-            <Link href="/app">
+            <ThemeToggle />
+            <Link href="/learn">
               <Button variant="primary" size="sm" className="h-9 px-4 font-semibold text-xs">
                 <span>Start learning</span>
                 <ArrowRight className="h-3.5 w-3.5 ml-1.5" aria-hidden="true" />
@@ -185,7 +187,7 @@ export default function LandingPage() {
             </p>
 
             <div className="flex flex-col sm:flex-row items-center justify-center gap-3 sm:gap-4 pt-2">
-              <Link href="/app" className="w-full sm:w-auto">
+              <Link href="/learn" className="w-full sm:w-auto">
                 <Button
                   variant="primary"
                   size="lg"
@@ -828,7 +830,7 @@ export default function LandingPage() {
               lasting memory with guided Socratic recall.
             </p>
             <div className="pt-2">
-              <Link href="/app">
+              <Link href="/learn">
                 <Button
                   variant="primary"
                   size="lg"
@@ -874,7 +876,7 @@ export default function LandingPage() {
               <a href="#faq" className="hover:text-[var(--text-primary)] transition-colors">
                 FAQ
               </a>
-              <Link href="/app" className="text-[var(--accent-blue)] hover:underline font-semibold">
+              <Link href="/learn" className="text-[var(--accent-blue)] hover:underline font-semibold">
                 Study Workspace
               </Link>
             </nav>

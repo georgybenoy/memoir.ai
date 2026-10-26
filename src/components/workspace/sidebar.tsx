@@ -2,20 +2,22 @@
 
 import * as React from 'react';
 import {
-  LayoutDashboard,
   BookOpen,
   Network,
-  Brain,
-  Clock,
   BarChart3,
   Settings,
   ChevronLeft,
   ChevronRight,
+  Sparkles,
   type LucideIcon,
 } from 'lucide-react';
 import { useWorkspaceStore, type WorkspaceView } from '@/lib/state/workspace-store';
 import { Button } from '@/components/ui/button';
 import { cn } from '@/lib/utils/cn';
+import { useRouter, usePathname } from 'next/navigation';
+import { useReviewStore } from '@/lib/state/review-store';
+import { getStorage } from '@/lib/db/bootstrap';
+import { deriveStepForMaterial } from '@/features/workflow/step-guard';
 
 interface NavItem {
   id: WorkspaceView;
@@ -24,11 +26,8 @@ interface NavItem {
 }
 
 const navItems: NavItem[] = [
-  { id: 'workspace', label: 'Home', icon: LayoutDashboard },
-  { id: 'materials', label: 'Study Materials', icon: BookOpen },
+  { id: 'workspace', label: 'Home / My Materials', icon: BookOpen },
   { id: 'concepts', label: 'Concept Map', icon: Network },
-  { id: 'recall', label: 'Recall Practice', icon: Brain },
-  { id: 'review', label: 'Spaced Review', icon: Clock },
   { id: 'progress', label: 'Progress & History', icon: BarChart3 },
   { id: 'settings', label: 'Data & Settings', icon: Settings },
 ];
@@ -39,15 +38,12 @@ export interface WorkspaceSidebarProps {
   onMobileItemClick?: () => void;
 }
 
-import { useRouter, usePathname } from 'next/navigation';
-import { useReviewStore } from '@/lib/state/review-store';
-
-const routeMap: Record<WorkspaceView, string> = {
-  workspace: '/app',
-  materials: '/app/materials',
+const routeMap: Record<string, string> = {
+  workspace: '/learn',
+  materials: '/learn',
   concepts: '/app/path',
-  recall: '/app/tutor',
-  review: '/app/review',
+  recall: '/learn',
+  review: '/learn',
   progress: '/app/progress',
   settings: '/app/settings',
 };
@@ -59,7 +55,7 @@ export const WorkspaceSidebar: React.FC<WorkspaceSidebarProps> = ({
 }) => {
   const router = useRouter();
   const pathname = usePathname();
-  const { sidebarCollapsed, toggleSidebar, activeView, setActiveView } = useWorkspaceStore();
+  const { sidebarCollapsed, toggleSidebar, setActiveView } = useWorkspaceStore();
   const totalDueCount = useReviewStore((state) => state.totalDueCount);
   const isCollapsed = !isMobileDrawer && sidebarCollapsed;
 
@@ -72,23 +68,57 @@ export const WorkspaceSidebar: React.FC<WorkspaceSidebarProps> = ({
     }
   };
 
+  const handleStartLearning = async () => {
+    onMobileItemClick?.();
+    try {
+      const repos = getStorage();
+      const docs = await repos.documents.list();
+      if (docs.length > 0) {
+        // Derive step for the latest material
+        const dest = await deriveStepForMaterial(docs[0].id, repos);
+        router.push(dest.route);
+      } else {
+        router.push('/learn/new');
+      }
+    } catch {
+      router.push('/learn/new');
+    }
+  };
+
   return (
     <aside
       aria-label="Navigation sidebar"
       className={cn(
         'flex flex-col border-r border-[var(--border-color)] bg-[var(--surface)] transition-all duration-200 select-none',
         isCollapsed ? 'w-16' : 'w-64',
-        className,
+        className
       )}
     >
+      {/* Primary Action: Start Learning */}
+      <div className="p-2 sm:p-3 pb-1 border-b border-[var(--border-color)]/60">
+        <Button
+          variant="primary"
+          onClick={handleStartLearning}
+          className={cn(
+            'w-full bg-[var(--primary)] text-white hover:bg-[var(--primary-hover)] font-semibold shadow-sm transition-all',
+            isCollapsed ? 'p-2 justify-center' : 'px-3 py-2.5 justify-start gap-2.5'
+          )}
+          title={isCollapsed ? 'Start Learning' : undefined}
+          aria-label="Start Learning"
+        >
+          <Sparkles className="h-4 w-4 shrink-0 text-white" aria-hidden="true" />
+          {!isCollapsed && <span className="truncate">Start Learning</span>}
+        </Button>
+      </div>
+
       {/* Nav items list */}
       <nav aria-label="Workspace navigation" className="flex-1 space-y-1 p-2 sm:p-3">
         {navItems.map((item) => {
           const Icon = item.icon;
           const targetRoute = routeMap[item.id];
-          const isActive = pathname === targetRoute || activeView === item.id;
-          const isReviewItem = item.id === 'review';
-          const hasDue = isReviewItem && totalDueCount > 0;
+          const isActive =
+            pathname === targetRoute ||
+            (item.id === 'workspace' && (pathname === '/learn' || pathname === '/app'));
 
           return (
             <button
@@ -96,19 +126,13 @@ export const WorkspaceSidebar: React.FC<WorkspaceSidebarProps> = ({
               type="button"
               onClick={() => handleSelect(item.id)}
               aria-current={isActive ? 'page' : undefined}
-              title={
-                isCollapsed
-                  ? hasDue
-                    ? `${item.label} (${totalDueCount} due)`
-                    : item.label
-                  : undefined
-              }
-              aria-label={hasDue ? `${item.label}, ${totalDueCount} reviews due` : item.label}
+              title={isCollapsed ? item.label : undefined}
+              aria-label={item.label}
               className={cn(
                 'group relative flex w-full items-center gap-3 rounded-[10px] px-3 py-2.5 text-sm font-medium transition-colors cursor-pointer',
                 isActive
                   ? 'bg-[var(--surface-hover)] text-[var(--text-primary)] font-semibold border-l-2 border-[var(--primary)]'
-                  : 'text-[var(--text-secondary)] hover:bg-[var(--surface-raised)] hover:text-[var(--text-primary)]',
+                  : 'text-[var(--text-secondary)] hover:bg-[var(--surface-raised)] hover:text-[var(--text-primary)]'
               )}
             >
               <Icon
@@ -116,17 +140,15 @@ export const WorkspaceSidebar: React.FC<WorkspaceSidebarProps> = ({
                   'h-5 w-5 shrink-0 transition-colors',
                   isActive
                     ? 'text-[var(--primary-hover)]'
-                    : hasDue
-                      ? 'text-[var(--danger)]'
-                      : 'text-[var(--text-muted)] group-hover:text-[var(--text-primary)]',
+                    : 'text-[var(--text-muted)] group-hover:text-[var(--text-primary)]'
                 )}
                 aria-hidden="true"
               />
               {!isCollapsed && (
                 <>
                   <span className="truncate">{item.label}</span>
-                  {hasDue && (
-                    <span className="ml-auto px-2 py-0.5 rounded-full text-[11px] font-semibold bg-[var(--danger)]/15 text-[var(--danger)] border border-[var(--danger)]/30">
+                  {item.id === 'workspace' && totalDueCount > 0 && (
+                    <span className="ml-auto px-1.5 py-0.5 rounded-full text-[10px] font-semibold bg-[var(--warning)]/15 text-[var(--warning)] border border-[var(--warning)]/30">
                       {totalDueCount} due
                     </span>
                   )}
@@ -147,7 +169,7 @@ export const WorkspaceSidebar: React.FC<WorkspaceSidebarProps> = ({
             aria-label={isCollapsed ? 'Expand sidebar' : 'Collapse sidebar'}
             className={cn(
               'w-full justify-center text-[var(--text-muted)] hover:text-[var(--text-primary)]',
-              !isCollapsed && 'justify-between px-3',
+              !isCollapsed && 'justify-between px-3'
             )}
           >
             {!isCollapsed && <span className="text-xs">Collapse sidebar</span>}

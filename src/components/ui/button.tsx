@@ -15,7 +15,7 @@ export const buttonVariants = cva(
           'bg-[var(--surface-raised)] border border-[var(--border-color)] text-[var(--text-primary)] hover:bg-[var(--surface-hover)] active:scale-[0.98]',
         ghost:
           'bg-transparent text-[var(--text-secondary)] hover:text-[var(--text-primary)] hover:bg-[var(--surface-hover)]',
-        destructive: 'bg-[var(--danger)] text-white hover:bg-rose-600 active:scale-[0.98]',
+        destructive: 'bg-[var(--danger-cta)] text-white hover:opacity-90 active:scale-[0.98]',
       },
       size: {
         sm: 'h-8 px-3 text-xs',

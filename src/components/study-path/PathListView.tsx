@@ -152,9 +152,9 @@ export function PathListView({
                                 key={prereq.id}
                                 className={`inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[11px] ${
                                   prereq.status === 'mastered'
-                                    ? 'bg-emerald-500/10 text-emerald-400'
-                                    : 'bg-surface-elevated text-text-muted'
-                                }`}
+                                    ? 'bg-[var(--surface-raised)] text-[var(--success)] border border-[var(--border-color)]'
+                                    : 'bg-[var(--surface-raised)] text-[var(--text-muted)] border border-[var(--border-color)]'
+                                  }`}
                               >
                                 {prereq.title}
                               </span>

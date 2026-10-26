@@ -40,12 +40,12 @@ export function PathDiagnostics({
           <Activity className="h-4 w-4 text-accent-cyan" aria-hidden="true" />
           <span>Graph & Pipeline Diagnostics</span>
           {isFallback ? (
-            <span className="inline-flex items-center gap-1 rounded bg-amber-500/10 px-1.5 py-0.5 text-[11px] font-semibold text-amber-400">
+            <span className="inline-flex items-center gap-1 rounded bg-[var(--surface-raised)] border border-[var(--border-color)] px-1.5 py-0.5 text-[11px] font-semibold text-[var(--warning)]">
               <AlertTriangle className="h-3 w-3" aria-hidden="true" />
               Approximate Linear Order
             </span>
           ) : (
-            <span className="inline-flex items-center gap-1 rounded bg-emerald-500/10 px-1.5 py-0.5 text-[11px] font-semibold text-emerald-400">
+            <span className="inline-flex items-center gap-1 rounded bg-[var(--surface-raised)] border border-[var(--border-color)] px-1.5 py-0.5 text-[11px] font-semibold text-[var(--success)]">
               <CheckCircle className="h-3 w-3" aria-hidden="true" />
               Verified DAG
             </span>

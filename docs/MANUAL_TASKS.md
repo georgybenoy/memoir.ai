@@ -39,4 +39,20 @@ Running list of tasks that only a human can perform. Agents append items here an
 - [ ] **Optional self-hosted ONNX model assets for air-gapped environments** — The embedding pipeline defaults to downloading `all-MiniLM-L6-v2` ONNX quantized files from Hugging Face hub with browser cache persistence (`env.useBrowserCache = true`). If air-gapped offline use is required, place model assets in `public/models/all-MiniLM-L6-v2` and set `localModelPath` in config.
 - [ ] **Verify In-App Review Notifications in target browser** — Open Settings → Spaced Review Reminders, click "Enable Review Notifications", verify that the browser permission prompt triggers only upon user click, and observe the honest limitation disclaimer regarding closed browser tabs.
 - [ ] **Test browser storage persistence on target browser** — In Settings → Storage Status & Health, click 'Ask the browser to keep this data' to test `navigator.storage.persist()` on physical desktop and mobile browsers, noting browser-specific auto-grant vs prompt behavior.
+- [ ] **Physical Mobile Browser Workflow Audit (Phase R5/R6)** — Test touch targets, virtual keyboard scrolling behavior, and screen reader announcements for the guided 4-step stepper on physical iOS Safari and Android Chrome devices.
+- [ ] **Phase R2 Backup Export/Import verification with legacy user backups** — Verify that real user backups created under schema v1 import into the upgraded schema v2 workspace on physical devices and render synthesized learning units properly.
+- [ ] **Phase R3 Deep Link & Back/Forward Browser Cache Audit** — Verify that browser back/forward history navigation between `/learn/[materialId]/organise`, `/learn/[materialId]/mode`, and `/learn/[materialId]/session/[sessionId]` preserves unsaved draft state smoothly across physical Safari and Firefox browsers.
+- [ ] **Phase R4 Live AI Model Evaluation & Spaced Repetition Scheduling Audit** — On a deployment with live Gemini API keys (`GEMINI_API_KEY`), execute a multi-turn Study conversation and a Recall question evaluation session to verify that the Gemini API returns valid structured evaluations under production conditions, that the fallback evaluator is not inadvertently triggered, and that newly scheduled SM-2 reviews correctly populate the Revision queue on the following calendar day.
+- [ ] **Phase R5 Physical Device Safe-Area & High-Contrast Audit** — On physical devices (e.g. iPhone with Dynamic Island / home bar, Android gesture navigation), verify that the `.safe-bottom` padding cleanly separates the action footer and on-screen keyboard from device hardware in landscape and portrait modes.
+- [ ] **Phase R5b Cross-Browser View Transitions & Color Appearance Audit** — Verify the circular ripple animation on desktop Chromium browsers, check Safari 18+ View Transitions support vs legacy Safari fallback cross-fade, and inspect OLED dark/light theme contrast and readability under direct sunlight and low-light environments.
+- [ ] **Phase R6 Live-Gemini Smoke Test Execution (Opt-In & Billable)** — To run the optional live Gemini end-to-end smoke test against the live Google Gemini API (which consumes API quota and incurs billable usage), execute:
+  ```powershell
+  $env:RUN_LIVE_GEMINI="true"
+  $env:GEMINI_API_KEY="<Your-Real-Gemini-Key>"
+  npx playwright test tests/e2e/r6-verification.spec.ts -g "Live Gemini"
+  ```
+  Confirm live structured concept extraction and rubric evaluations against Google AI Studio servers.
+- [ ] **Phase R6 Physical Device Stepper and Virtual Keyboard Verification** — On physical iOS Safari and Android Chrome devices, perform the First-Time Learner (Scenario 1) and Recall Evaluation (Scenario 2) flows to confirm that opening the on-screen virtual keyboard does not obscure the answer textarea, that tap targets meet the 44×44px touch criterion, and that browser tab suspension does not clear IndexedDB draft state.
+
+
 

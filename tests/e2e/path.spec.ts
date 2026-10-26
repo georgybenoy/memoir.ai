@@ -11,8 +11,15 @@ import AxeBuilder from '@axe-core/playwright';
  * Seeds a deterministic study session with concepts, dependencies, and path items into IndexedDB.
  */
 async function seedStudyPathData(page: import('@playwright/test').Page) {
-  await page.goto('/app');
-  await expect(page.getByRole('heading', { name: 'What are you learning today?' })).toBeVisible({ timeout: 20000 });
+  await page.addInitScript(() => {
+    try {
+      sessionStorage.setItem('edumentor_loaded', 'true');
+    } catch {
+      // ignore
+    }
+  });
+  await page.goto('/learn');
+  await expect(page.getByRole('heading', { name: 'My Learning Journey', level: 1 })).toBeVisible({ timeout: 20000 });
 
   await page.evaluate(async () => {
     return new Promise<void>((resolve, reject) => {

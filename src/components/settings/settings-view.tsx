@@ -12,7 +12,9 @@ import {
   Sparkles,
   Info,
   Bell,
+  Palette,
 } from 'lucide-react';
+import { ThemeToggle } from '@/components/theme';
 import {
   getNotificationStatus,
   requestNotificationPermission,
@@ -238,6 +240,26 @@ export const SettingsView: React.FC = () => {
       const repos = getStorage();
       const result = await executeImport(importValidation.parsedEnvelope, policy, repos);
       setSaved();
+
+      // On import, apply imported theme preference if present (PRD & Phase R5b)
+      const importedTheme = importValidation.parsedEnvelope.workspace?.preferences?.theme;
+      if (
+        importedTheme &&
+        (importedTheme === 'light' || importedTheme === 'dark' || importedTheme === 'system')
+      ) {
+        try {
+          localStorage.setItem('edumentor_theme', importedTheme);
+          window.dispatchEvent(
+            new StorageEvent('storage', {
+              key: 'edumentor_theme',
+              newValue: importedTheme,
+            })
+          );
+        } catch {
+          // ignore
+        }
+      }
+
       setImportModalOpen(false);
       setImportValidation(null);
 
@@ -685,6 +707,30 @@ export const SettingsView: React.FC = () => {
         </CardContent>
       </Card>
 
+      {/* Appearance & Theme (Phase R5b) */}
+      <Card>
+        <CardHeader>
+          <div className="flex items-center gap-2">
+            <Palette className="h-5 w-5 text-[var(--accent-blue)]" aria-hidden="true" />
+            <CardTitle>Appearance & Theme</CardTitle>
+          </div>
+          <CardDescription>
+            Switch between Dark, Light, or follow your Operating System preference.
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+            <div>
+              <span className="text-sm font-medium text-[var(--text-primary)]">Interface Theme</span>
+              <p className="text-xs text-[var(--text-muted)]">
+                Smooth circular ripple reveal when toggling themes. Persists across reloads and syncs across browser tabs.
+              </p>
+            </div>
+            <ThemeToggle variant="radio-group" />
+          </div>
+        </CardContent>
+      </Card>
+
       {/* Study Preferences */}
       <Card>
         <CardHeader>
@@ -729,7 +775,7 @@ export const SettingsView: React.FC = () => {
               onClick={() =>
                 handlePreferenceChange('reducedMotion', !workspace?.preferences.reducedMotion)
               }
-              aria-label="Toggle reduced motion preference"
+              aria-label={`${workspace?.preferences.reducedMotion ? 'Enabled' : 'Disabled'} — Toggle reduced motion preference`}
             >
               {workspace?.preferences.reducedMotion ? 'Enabled' : 'Disabled'}
             </Button>
@@ -803,7 +849,7 @@ export const SettingsView: React.FC = () => {
               variant={workspace?.preferences.reviewNotifications ? 'primary' : 'secondary'}
               size="sm"
               onClick={handleToggleNotifications}
-              aria-label="Toggle review notifications"
+              aria-label={`${workspace?.preferences.reviewNotifications ? 'Enabled' : 'Disabled'} — Toggle review notifications`}
             >
               {workspace?.preferences.reviewNotifications ? 'Enabled' : 'Disabled'}
             </Button>

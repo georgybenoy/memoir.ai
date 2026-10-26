@@ -16,12 +16,14 @@ import {
   type ConceptRecord,
   type DocumentChunkRecord,
   type RecallQuestionRecord,
+  type RecallAttemptRecord,
 } from '@/types/domain';
 import {
   type QuestionStyle,
   QUESTION_STYLES,
 } from '@/lib/ai/schemas';
 import { fetchGenerateQuestion, type AiClientOptions } from '@/lib/ai/client';
+import { findReusableQuestion } from '@/features/modes/question-policy';
 
 export const DEFAULT_DUPLICATE_OVERLAP_THRESHOLD = 0.65;
 
@@ -232,6 +234,42 @@ export async function getOrGenerateRecallQuestion(
     clientOptions,
   } = options;
 
+  // 0. Question Reuse Policy check (Phase R4)
+  try {
+    const db = await openDatabase(dbName);
+    const existingQuestions = (await db.getAllFromIndex(
+      'recallQuestions',
+      'by-concept',
+      concept.id,
+    )) as RecallQuestionRecord[];
+
+    const pastAttempts = (await db.getAllFromIndex(
+      'recallAttempts',
+      'by-concept',
+      concept.id,
+    )) as RecallAttemptRecord[];
+    pastAttempts.sort((a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime());
+
+    const sessionQuestionIds = recentQuestions.map((q) => q.id);
+
+    const reusable = findReusableQuestion({
+      concept,
+      availableQuestions: existingQuestions,
+      sessionQuestionIds,
+      pastAttemptsForConcept: pastAttempts,
+    });
+
+    if (reusable) {
+      return {
+        question: reusable,
+        isFallback: false,
+        style: reusable.questionStyle as QuestionStyle,
+      };
+    }
+  } catch (cacheErr) {
+    console.warn('Could not query reusable question cache:', cacheErr);
+  }
+
   const recentStyles = recentQuestions.map((q) => q.questionStyle as QuestionStyle);
   const recentPrompts = recentQuestions.map((q) => q.prompt);
   const selectedStyle = selectNextQuestionStyle(recentStyles, preferredStyle);
@@ -274,12 +312,16 @@ export async function getOrGenerateRecallQuestion(
         finalQuestion = {
           id: generateId(),
           conceptId: concept.id,
+          materialId: concept.materialId,
+          unitId: concept.unitId,
           prompt: response.prompt,
           questionStyle: response.style,
           referencePoints: concept.keyTerms.slice(0, 4),
           sourceChunkIds: response.sourceChunkIds,
           difficulty: difficultyLevel,
           expectedKeyPoints: response.expectedKeyPoints,
+          contentVersion: concept.contentVersion,
+          promptVersion: concept.promptVersion,
           createdAt: nowIso(),
         };
       }

@@ -139,38 +139,38 @@ export function PathGraphView({
     switch (status) {
       case 'available':
         return {
-          fill: '#081c24',
-          stroke: isSelected ? '#25D8E8' : '#0e7490',
-          textColor: '#25D8E8',
+          fill: 'var(--graph-node-available-bg)',
+          stroke: isSelected ? 'var(--graph-node-available-stroke-selected)' : 'var(--graph-node-available-stroke)',
+          textColor: 'var(--graph-node-available-text)',
           icon: Sparkles,
         };
       case 'in_progress':
         return {
-          fill: '#1e1435',
-          stroke: isSelected ? '#C084FC' : '#8B5CF6',
-          textColor: '#C084FC',
+          fill: 'var(--graph-node-learning-bg)',
+          stroke: isSelected ? 'var(--graph-node-learning-stroke-selected)' : 'var(--graph-node-learning-stroke)',
+          textColor: 'var(--graph-node-learning-text)',
           icon: Clock,
         };
       case 'review_due':
         return {
-          fill: '#291804',
-          stroke: isSelected ? '#FBBF24' : '#F59E0B',
-          textColor: '#FBBF24',
+          fill: 'var(--graph-node-review-bg)',
+          stroke: isSelected ? 'var(--graph-node-review-stroke-selected)' : 'var(--graph-node-review-stroke)',
+          textColor: 'var(--graph-node-review-text)',
           icon: RefreshCw,
         };
       case 'mastered':
         return {
-          fill: '#06261c',
-          stroke: isSelected ? '#34D399' : '#10B981',
-          textColor: '#34D399',
+          fill: 'var(--graph-node-mastered-bg)',
+          stroke: isSelected ? 'var(--graph-node-mastered-stroke-selected)' : 'var(--graph-node-mastered-stroke)',
+          textColor: 'var(--graph-node-mastered-text)',
           icon: CheckCircle2,
         };
       case 'locked':
       default:
         return {
-          fill: '#0F172A',
-          stroke: isSelected ? '#94A3B8' : '#334155',
-          textColor: '#94A3B8',
+          fill: 'var(--graph-node-locked-bg)',
+          stroke: isSelected ? 'var(--graph-node-locked-text)' : 'var(--graph-node-locked-stroke)',
+          textColor: 'var(--graph-node-locked-text)',
           icon: Lock,
         };
     }
@@ -258,7 +258,7 @@ export function PathGraphView({
               markerHeight="6"
               orient="auto-start-reverse"
             >
-              <path d="M 0 1.5 L 8 5 L 0 8.5 z" fill="#475569" />
+              <path d="M 0 1.5 L 8 5 L 0 8.5 z" fill="var(--graph-edge)" />
             </marker>
             <marker
               id="arrowhead-active"
@@ -269,7 +269,7 @@ export function PathGraphView({
               markerHeight="6"
               orient="auto-start-reverse"
             >
-              <path d="M 0 1.5 L 8 5 L 0 8.5 z" fill="#8B5CF6" />
+              <path d="M 0 1.5 L 8 5 L 0 8.5 z" fill="var(--graph-edge-highlight)" />
             </marker>
           </defs>
 
@@ -289,7 +289,7 @@ export function PathGraphView({
                 y1={42}
                 x2={col.x + NODE_WIDTH / 2}
                 y2={totalHeight - 20}
-                stroke="#1E293B"
+                stroke="var(--graph-grid)"
                 strokeDasharray="4 4"
                 strokeWidth="1"
               />
@@ -320,7 +320,7 @@ export function PathGraphView({
                 key={edge.id}
                 d={pathData}
                 fill="none"
-                stroke={isHighlighted ? '#8B5CF6' : '#334155'}
+                stroke={isHighlighted ? 'var(--graph-edge-highlight)' : 'var(--graph-edge)'}
                 strokeWidth={isHighlighted ? 2.5 : 1.5}
                 markerEnd={isHighlighted ? 'url(#arrowhead-active)' : 'url(#arrowhead-default)'}
                 className="transition-colors duration-150"
@@ -436,7 +436,7 @@ export function PathGraphView({
             <Clock className="h-3 w-3" aria-hidden="true" />
             <span>In Progress</span>
           </span>
-          <span className="inline-flex items-center gap-1 text-emerald-400">
+          <span className="inline-flex items-center gap-1 text-[var(--success)]">
             <CheckCircle2 className="h-3 w-3" aria-hidden="true" />
             <span>Mastered</span>
           </span>
