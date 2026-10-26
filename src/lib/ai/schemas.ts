@@ -138,7 +138,7 @@ export const ExplainConceptRequestSchema = z.object({
     .max(12)
     .optional(),
   sourceMode: z.enum(['document', 'topic']),
-  mode: z.enum(['teach', 'simplify']).default('teach').optional(),
+  mode: z.enum(['teach', 'simplify', 'analogy', 'example']).default('teach').optional(),
   focus: z.array(z.string().min(1)).max(10).optional(),
   focusPoints: z.array(z.string().min(1)).max(10).optional(),
   model: z.string().optional(),

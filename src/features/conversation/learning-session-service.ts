@@ -14,6 +14,7 @@ import {
   type RecallQuestionRecord,
   type RecallAttemptRecord,
   type LearningEventRecord,
+  type ConversationMessageRecord,
 } from '@/types/domain';
 import { type MachineState } from './types';
 import { resolveRecoveryState, isTransientState } from './machine';
@@ -27,6 +28,7 @@ export interface LoadedSessionContext {
   sourceChunks: DocumentChunkRecord[];
   latestQuestion: RecallQuestionRecord | null;
   latestAttempt: RecallAttemptRecord | null;
+  messages: ConversationMessageRecord[];
   totalPathConcepts: number;
   completedPathConcepts: number;
 }
@@ -129,6 +131,12 @@ export async function loadSessionWithContext(
     latestAttempt = attempts[0];
   }
 
+  // Fetch conversation messages for this session
+  const rawMessages = (await db.getAllFromIndex('conversationMessages', 'by-session', sessionId)) as ConversationMessageRecord[];
+  const messages = rawMessages.sort(
+    (a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime(),
+  );
+
   // Calculate path progress
   const pathItems = await db.getAllFromIndex('studyPathItems', 'by-session', sessionId);
   const totalPathConcepts = pathItems.length;
@@ -145,6 +153,7 @@ export async function loadSessionWithContext(
     sourceChunks,
     latestQuestion,
     latestAttempt,
+    messages,
     totalPathConcepts,
     completedPathConcepts,
   };
@@ -172,7 +181,7 @@ export async function persistDraftAnswer(
  */
 export async function persistSelectedConfidence(
   sessionId: string,
-  confidence: number,
+  confidence: number | null,
   dbName = DB_NAME,
 ): Promise<void> {
   const db = await openDatabase(dbName);

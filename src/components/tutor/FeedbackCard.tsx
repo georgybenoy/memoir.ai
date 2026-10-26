@@ -32,6 +32,7 @@ export interface FeedbackCardProps {
 export const FeedbackCard: React.FC<FeedbackCardProps> = ({
   evaluation,
   weakPrerequisite,
+  onContinue,
   onRevise,
   onTryAgain,
   onSelectPrerequisite,
@@ -318,6 +319,48 @@ export const FeedbackCard: React.FC<FeedbackCardProps> = ({
             {evaluation.nextAction}
           </span>
         </div>
+
+        {/* Action Controls */}
+        {(onContinue || onTryAgain || (!isPassed && onRevise)) && (
+          <div className="pt-3 border-t border-[var(--border-color)]/60 flex flex-wrap items-center justify-between gap-3">
+            <div className="flex flex-wrap items-center gap-2">
+              {onTryAgain && (
+                <Button
+                  variant="secondary"
+                  size="sm"
+                  onClick={onTryAgain}
+                  className="h-9 px-4 text-xs font-medium cursor-pointer"
+                  aria-label="Try again: Attempt another recall question"
+                >
+                  <span>Try again</span>
+                </Button>
+              )}
+              {!isPassed && onRevise && (
+                <Button
+                  variant="secondary"
+                  size="sm"
+                  onClick={onRevise}
+                  className="h-9 px-4 text-xs font-medium text-[var(--warning)] border-[var(--warning)]/30 bg-[var(--surface)] hover:bg-[var(--warning)]/10 cursor-pointer"
+                  aria-label="Revise Concept: Review study material"
+                >
+                  <BookOpen className="h-3.5 w-3.5 mr-1.5" aria-hidden="true" />
+                  <span>Revise Concept</span>
+                </Button>
+              )}
+            </div>
+            {onContinue && (
+              <Button
+                variant="primary"
+                size="sm"
+                onClick={onContinue}
+                className="h-9 px-5 text-xs font-semibold bg-[var(--primary)] text-white hover:bg-[var(--primary)]/90 cursor-pointer"
+                aria-label="Continue: Proceed to next concept or question"
+              >
+                <span>Continue &rarr;</span>
+              </Button>
+            )}
+          </div>
+        )}
 
         {/* AI Disclaimer Footnote */}
         <div className="pt-2 border-t border-[var(--border-color)]/50 flex items-start gap-1.5 text-[10px] text-[var(--text-muted)] leading-relaxed">

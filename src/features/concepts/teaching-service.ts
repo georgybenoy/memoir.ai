@@ -16,6 +16,7 @@ export interface TeachConceptOptions {
   userMessage?: string;
   sourceMode?: 'document' | 'topic';
   model?: AllowedModelId;
+  mode?: 'teach' | 'simplify' | 'analogy' | 'example';
   signal?: AbortSignal;
   dbName?: string;
 }
@@ -43,6 +44,7 @@ export async function teachConcept(
     userMessage,
     sourceMode = 'document',
     model,
+    mode = 'teach',
     signal,
     dbName = DB_NAME,
   } = options;
@@ -114,6 +116,7 @@ export async function teachConcept(
         prerequisiteSummaries,
         conversationHistory: recentHistory,
         sourceMode,
+        mode,
         model,
       },
       { signal },

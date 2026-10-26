@@ -2,32 +2,21 @@
 
 import * as React from 'react';
 import { useRouter } from 'next/navigation';
-import {
-  Pause,
-  LogOut,
-  Sparkles,
-  Brain,
-  Clock,
-  BookOpen,
-  FileText,
-  AlertCircle,
-  WifiOff,
-  CheckCircle2,
-} from 'lucide-react';
+import { Sparkles, AlertCircle, WifiOff } from 'lucide-react';
 import { Button } from '@/components/ui/button';
-import { Card, CardHeader, CardTitle, CardContent } from '@/components/ui/card';
-import { TutorHeader } from '@/components/tutor/TutorHeader';
-import { QuestionCard } from '@/components/tutor/QuestionCard';
-import { FeedbackCard } from '@/components/tutor/FeedbackCard';
-import { ContextActionBar } from '@/components/tutor/ContextActionBar';
-import { SafeMarkdown } from '@/components/tutor/SafeMarkdown';
-import { useLearningSession } from '@/features/conversation/use-learning-session';
-import { useSessionController } from '@/features/modes/controller';
+import { SessionHeader } from '@/components/session/SessionHeader';
+import { SessionSidebar, type PrerequisiteStatus } from '@/components/session/SessionSidebar';
+import { StudySessionView } from '@/components/session/StudySessionView';
+import { RecallSessionView } from '@/components/session/RecallSessionView';
+import { RevisionSessionView } from '@/components/session/RevisionSessionView';
 import { SessionCompletionView } from '@/components/workflow/session-completion-view';
+import { useSessionController } from '@/features/modes/controller';
+import { useLearningSession } from '@/features/conversation/use-learning-session';
+import { getDueReviewQueue } from '@/features/spaced-repetition/queue';
 import { getStorage } from '@/lib/db/bootstrap';
-import { getChunkExcerpt } from '@/features/ingestion/provenance';
 import { useWorkspaceStore } from '@/lib/state/workspace-store';
 import { type LearningMode } from '@/features/workflow/types';
+import { type MasteryStateRecord } from '@/types/domain';
 import { cn } from '@/lib/utils/cn';
 
 export interface Step4SessionHostProps {
@@ -47,13 +36,14 @@ export function Step4SessionHost({
   const isOnline = useWorkspaceStore((state) => state.isOnline);
   const headingRef = React.useRef<HTMLHeadingElement>(null);
 
-  // Shared Session Controller (Phase R4)
+  // 1. Session Controller
   const {
     mode: controllerMode,
     status: sessionStatus,
+    currentConcept: controllerConcept,
+    currentUnit,
     progress,
     summary,
-    currentUnit,
     pauseSession,
     completeSession,
     abandonSession,
@@ -64,23 +54,24 @@ export function Step4SessionHost({
     initialMode,
   });
 
-  // Mount existing mode engine via useLearningSession
+  // 2. Conversation & Domain State Machine Hook (wired to controller's currentConcept)
   const {
     machineState,
     session,
-    concept,
+    concept: hookConcept,
     document,
     sourceChunks,
+    messages,
     currentQuestion,
     draftAnswer,
     selectedConfidence,
     lastEvaluation,
     isFallbackQuestion,
     revisionPlan,
-    revisionExplanation,
-    isRevisionLoading,
-    isLoading,
-    error,
+    isTeachingLoading,
+    teachingError,
+    isLoading: isMachineLoading,
+    error: machineError,
     restoredNotice,
     clearRestoredNotice,
     setDraftAnswer,
@@ -91,14 +82,20 @@ export function Step4SessionHost({
     handleContinue: rawHandleContinue,
     handleTryAgain,
     handleRevise,
-    handleReviewLater,
     handleSelectConcept,
-  } = useLearningSession({ sessionId });
+    teachConceptTurn,
+    cancelInFlight,
+  } = useLearningSession({
+    sessionId,
+    conceptId: controllerConcept?.id,
+  });
 
-  // Move focus to step heading on mount
+  // Move focus to step heading on mount for accessibility
   React.useEffect(() => {
     headingRef.current?.focus();
   }, []);
+
+  const activeConcept = hookConcept ?? controllerConcept;
 
   const effectiveMode: LearningMode =
     controllerMode ||
@@ -109,7 +106,107 @@ export function Step4SessionHost({
       ? 'revision'
       : 'study');
 
-  // Handle continuing to the next concept
+  // Load prerequisites and mastery context for the sidebar
+  const [prereqStatuses, setPrereqStatuses] = React.useState<PrerequisiteStatus[]>([]);
+  const [currentMastery, setCurrentMastery] = React.useState<MasteryStateRecord | null>(null);
+
+  React.useEffect(() => {
+    let mounted = true;
+    async function loadConceptContext() {
+      if (!activeConcept?.id) {
+        setPrereqStatuses([]);
+        setCurrentMastery(null);
+        return;
+      }
+      try {
+        const repos = getStorage();
+        const [allDeps, masteryList] = await Promise.all([
+          repos.dependencies.list(),
+          repos.mastery.list(),
+        ]);
+        if (!mounted) return;
+
+        const masteryMap = new Map(masteryList.map((m) => [m.conceptId, m]));
+        const currentM = masteryMap.get(activeConcept.id) ?? null;
+        setCurrentMastery(currentM);
+
+        const deps = allDeps.filter(
+          (d) => d.dependentConceptId === activeConcept.id && !d.removed,
+        );
+        const prereqList: PrerequisiteStatus[] = [];
+        for (const d of deps) {
+          const prereqConcept = await repos.concepts.get(d.prerequisiteId);
+          if (prereqConcept) {
+            const m = masteryMap.get(prereqConcept.id);
+            const isMastered = m && m.level >= 3;
+            prereqList.push({
+              id: prereqConcept.id,
+              title: prereqConcept.title,
+              status: isMastered ? 'mastered' : 'available',
+            });
+          }
+        }
+        setPrereqStatuses(prereqList);
+      } catch (err) {
+        console.warn('Could not load concept sidebar context:', err);
+      }
+    }
+    void loadConceptContext();
+    return () => {
+      mounted = false;
+    };
+  }, [activeConcept?.id]);
+
+  // Due items state for Revision Mode
+  const [dueCount, setDueCount] = React.useState<number>(0);
+  const [nextDueText, setNextDueText] = React.useState<string | null>(null);
+  const [nextScheduledReviewDate, setNextScheduledReviewDate] = React.useState<string | null>(null);
+
+  React.useEffect(() => {
+    let mounted = true;
+    async function checkDueQueue() {
+      try {
+        const queue = await getDueReviewQueue();
+        if (!mounted) return;
+        setDueCount(queue.allItemsOrdered.length);
+        if (queue.upcoming.length > 0) {
+          setNextDueText(queue.upcoming[0].humanDueText);
+        }
+      } catch (err) {
+        console.warn('Could not load due review queue:', err);
+      }
+    }
+    if (effectiveMode === 'revision') {
+      void checkDueQueue();
+    }
+    return () => {
+      mounted = false;
+    };
+  }, [effectiveMode]);
+
+  // When evaluation occurs in revision mode, fetch next scheduled review date
+  React.useEffect(() => {
+    let mounted = true;
+    async function fetchNextDueDate() {
+      if (effectiveMode !== 'revision' || !activeConcept?.id || !lastEvaluation) return;
+      try {
+        const repos = getStorage();
+        const srRecord = await repos.spacedRepetition.get(activeConcept.id);
+        if (mounted && srRecord?.nextDueAt) {
+          const d = new Date(srRecord.nextDueAt);
+          setNextScheduledReviewDate(d.toLocaleDateString(undefined, { dateStyle: 'medium' }));
+        }
+      } catch {
+        // ignore
+      }
+    }
+    void fetchNextDueDate();
+    return () => {
+      mounted = false;
+    };
+  }, [effectiveMode, activeConcept?.id, lastEvaluation]);
+
+  // Advance concept / continue handler
   const handleContinue = React.useCallback(async () => {
     await rawHandleContinue();
     if (machineState === 'FEEDBACK' || machineState === 'NEXT_CONCEPT') {
@@ -126,7 +223,7 @@ export function Step4SessionHost({
     }
   };
 
-  // Pause session and return to Step 3
+  // Pause session and return to Step 3 (preserves draft & state)
   const handlePause = async () => {
     try {
       await pauseSession();
@@ -136,7 +233,7 @@ export function Step4SessionHost({
     router.push(`/learn/${materialId}/mode`);
   };
 
-  // Exit session and return to Home (marks abandoned, keeps all records)
+  // Exit session and return to Library (preserves draft & state)
   const handleExit = async () => {
     try {
       await abandonSession();
@@ -144,6 +241,15 @@ export function Step4SessionHost({
       console.error('Error saving session on exit:', err);
     }
     router.push('/learn');
+  };
+
+  // Switch mode helpers
+  const handleSwitchToStudy = () => {
+    router.push(`/learn/${materialId}/mode`);
+  };
+
+  const handleSwitchToRecall = () => {
+    router.push(`/learn/${materialId}/mode`);
   };
 
   // Navigation handlers from completion view
@@ -162,10 +268,6 @@ export function Step4SessionHost({
     router.push(`/learn/${materialId}/mode`);
   };
 
-  const primaryChunk = sourceChunks.length > 0 ? sourceChunks[0] : null;
-  const sourceExcerpt =
-    document && primaryChunk ? getChunkExcerpt(document, primaryChunk, 200) : null;
-
   // Completion view if completed
   if (sessionStatus === 'completed' && summary) {
     return (
@@ -181,110 +283,28 @@ export function Step4SessionHost({
     );
   }
 
+  const combinedError = machineError || teachingError;
+
   return (
-    <div className={cn('space-y-6 max-w-4xl mx-auto py-4 sm:py-6', className)}>
-      {/* Unified Session Header across all modes */}
-      <header
-        aria-label="Active session status"
-        className="rounded-xl border border-[var(--border-color)] bg-[var(--surface)] p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-4 shadow-sm"
-      >
-        <div className="space-y-1.5 min-w-0 flex-1">
-          <div className="flex items-center gap-2 flex-wrap">
-            <span
-              className={cn(
-                'inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-xs font-semibold border',
-                effectiveMode === 'study' &&
-                  'bg-[var(--primary)]/15 text-[var(--text-primary)] border-[var(--primary)]/30',
-                effectiveMode === 'recall' &&
-                  'bg-[var(--accent-cyan)]/15 text-[var(--accent-cyan)] border-[var(--accent-cyan)]/30',
-                effectiveMode === 'revision' &&
-                  'bg-[var(--warning)]/15 text-[var(--warning)] border-[var(--warning)]/30',
-              )}
-            >
-              {effectiveMode === 'study' && <Sparkles className="h-3 w-3" aria-hidden="true" />}
-              {effectiveMode === 'recall' && <Brain className="h-3 w-3" aria-hidden="true" />}
-              {effectiveMode === 'revision' && <Clock className="h-3 w-3" aria-hidden="true" />}
-              <span className="capitalize">{effectiveMode} Mode</span>
-            </span>
+    <div className={cn('space-y-6 max-w-7xl mx-auto py-4 sm:py-6 px-3 sm:px-6', className)}>
+      {/* 1. Compact Session Header (Replaces old 'Active Learning Session' card) */}
+      <SessionHeader
+        materialName={document?.filename}
+        unitTitle={currentUnit?.title}
+        conceptTitle={activeConcept?.title}
+        mode={effectiveMode}
+        progressLabel={progress.stageLabel}
+        onFinish={handleEndSession}
+        onPause={handlePause}
+        onExit={handleExit}
+      />
 
-            <span
-              className="text-xs text-[var(--text-muted)] truncate max-w-[200px]"
-              title={document?.filename}
-            >
-              {document?.filename ?? 'Study Material'}
-            </span>
-
-            {currentUnit?.title && (
-              <span className="text-xs text-[var(--text-muted)] border-l border-[var(--border-color)] pl-2 truncate max-w-[200px]">
-                {currentUnit.title}
-              </span>
-            )}
-          </div>
-
-          <div className="flex items-baseline gap-2 flex-wrap">
-            <h1
-              ref={headingRef}
-              tabIndex={-1}
-              className="text-lg sm:text-xl font-bold text-[var(--text-primary)] truncate focus:outline-none"
-            >
-              {concept?.title ?? 'Active Learning Session'}
-            </h1>
-            <span className="text-xs font-mono text-[var(--text-muted)] shrink-0">
-              {progress.stageLabel}
-            </span>
-          </div>
-
-          {/* Granular Progress Bar */}
-          <div className="w-full max-w-md bg-[var(--surface-raised)] rounded-full h-1.5 overflow-hidden border border-[var(--border-color)]">
-            <div
-              className="bg-[var(--primary)] h-full transition-all duration-300"
-              style={{ width: `${Math.min(100, Math.max(0, progress.percent))}%` }}
-            />
-          </div>
-        </div>
-
-        {/* Action Controls: Finish, Pause & Exit with 44px tap targets */}
-        <div className="flex items-center gap-2 shrink-0 flex-wrap sm:flex-nowrap">
-          <Button
-            variant="ghost"
-            size="sm"
-            onClick={handleEndSession}
-            className="text-xs text-[var(--text-secondary)] hover:text-[var(--accent-green)] border border-[var(--border-color)] bg-[var(--surface-raised)] min-h-[44px] px-3 font-medium"
-            aria-label="Finish study session and view summary"
-          >
-            <CheckCircle2 className="h-4 w-4 mr-1 text-[var(--accent-green)]" aria-hidden="true" />
-            <span>Finish</span>
-          </Button>
-          <Button
-            variant="ghost"
-            size="sm"
-            onClick={handlePause}
-            className="text-xs text-[var(--text-secondary)] hover:text-[var(--text-primary)] border border-[var(--border-color)] bg-[var(--surface-raised)] min-h-[44px] px-3 font-medium"
-            aria-label="Pause session and return to mode selection"
-          >
-            <Pause className="h-4 w-4 mr-1" aria-hidden="true" />
-            <span>Pause</span>
-          </Button>
-          <Button
-            variant="ghost"
-            size="sm"
-            onClick={handleExit}
-            className="text-xs text-[var(--text-secondary)] hover:text-[var(--danger)] border border-[var(--border-color)] bg-[var(--surface-raised)] min-h-[44px] px-3 font-medium"
-            aria-label="Exit session and return to workflow home"
-          >
-            <LogOut className="h-4 w-4 mr-1" aria-hidden="true" />
-            <span>Exit</span>
-          </Button>
-        </div>
-      </header>
-
-      {/* Active Session Content */}
-      <div className="space-y-6">
-        {/* Restored notice */}
+      {/* Notifications: Restored Session & Offline Status */}
+      <div className="space-y-3">
         {restoredNotice && (
           <div
             role="status"
-            className="flex items-center justify-between gap-3 p-3.5 rounded-xl border border-[var(--accent-blue)]/40 bg-[var(--accent-blue)]/10 text-xs sm:text-sm text-[var(--text-primary)]"
+            className="flex items-center justify-between gap-3 p-3.5 rounded-xl border border-[var(--accent-blue)]/40 bg-[var(--accent-blue)]/10 text-xs sm:text-sm text-[var(--text-primary)] shadow-xs"
           >
             <div className="flex items-center gap-2.5">
               <Sparkles className="h-4 w-4 text-[var(--accent-blue)] shrink-0" aria-hidden="true" />
@@ -302,197 +322,125 @@ export function Step4SessionHost({
           </div>
         )}
 
-        {/* Offline Notice */}
         {!isOnline && (
           <aside
             role="status"
             aria-live="polite"
-            className="flex items-center gap-2.5 p-3.5 rounded-xl border border-[var(--warning)]/40 bg-[var(--warning)]/10 text-xs sm:text-sm text-[var(--text-primary)]"
+            className="flex items-center gap-2.5 p-3.5 rounded-xl border border-[var(--warning)]/40 bg-[var(--warning)]/10 text-xs sm:text-sm text-[var(--text-primary)] shadow-xs"
           >
             <WifiOff className="h-4 w-4 text-[var(--warning)] shrink-0" aria-hidden="true" />
             <span className="font-medium">
-              The tutor couldn’t connect right now. Your saved learning data is still available.
+              The tutor couldn’t connect right now. Your saved learning records remain fully available.
             </span>
           </aside>
         )}
 
-        {/* Error Notice */}
-        {error && (
+        {combinedError && !isTeachingLoading && (
           <div
             role="alert"
-            className="flex items-center gap-2.5 p-3.5 rounded-xl border border-[var(--danger)]/30 bg-[var(--danger)]/10 text-xs sm:text-sm text-[var(--danger)]"
+            className="flex items-center gap-2.5 p-3.5 rounded-xl border border-[var(--danger)]/30 bg-[var(--danger)]/10 text-xs sm:text-sm text-[var(--danger)] shadow-xs"
           >
             <AlertCircle className="h-4 w-4 shrink-0" aria-hidden="true" />
             <span className="font-medium">
-              {/connect|offline|network|fetch|disconnected/i.test(error)
-                ? 'The tutor couldn’t connect right now. Your saved learning data is still available.'
-                : error}
+              {/connect|offline|network|fetch|disconnected|timeout/i.test(combinedError)
+                ? 'The tutor couldn’t connect right now. Your saved learning records remain safe.'
+                : combinedError}
             </span>
           </div>
         )}
+      </div>
 
-        {/* Tutor Header */}
-        <TutorHeader
-          concept={concept}
-          machineState={machineState}
-          qualityGrade={lastEvaluation?.qualityGrade}
-          sourceMode={session?.sourceMode}
-          documentName={document?.filename}
-        />
-
-        {/* Socratic Explanation Section */}
-        {concept && (
-          <section aria-labelledby="concept-explanation-heading">
-            <Card className="border-[var(--border-color)] bg-[var(--surface)] shadow-sm">
-              <CardHeader className="pb-3 border-b border-[var(--border-color)]/60">
-                <div className="flex items-center gap-2">
-                  <BookOpen className="h-4 w-4 text-[var(--primary)]" aria-hidden="true" />
-                  <CardTitle
-                    id="concept-explanation-heading"
-                    className="text-sm sm:text-base font-semibold text-[var(--text-primary)]"
-                  >
-                    Canonical Explanation & Mechanism
-                  </CardTitle>
-                </div>
-              </CardHeader>
-              <CardContent className="pt-4 space-y-4">
-                <SafeMarkdown
-                  content={concept.canonicalExplanation || concept.summary}
-                  className="text-sm leading-relaxed text-[var(--text-primary)]"
-                />
-
-                {concept.keyTerms && concept.keyTerms.length > 0 && (
-                  <div className="flex flex-wrap items-center gap-1.5 pt-1">
-                    <span className="text-[11px] font-semibold text-[var(--text-muted)] mr-1">
-                      Key Terms:
-                    </span>
-                    {concept.keyTerms.map((term, i) => (
-                      <span
-                        key={i}
-                        className="px-2 py-0.5 rounded-full text-[11px] bg-[var(--surface-raised)] border border-[var(--border-color)] text-[var(--accent-blue)]"
-                      >
-                        {term}
-                      </span>
-                    ))}
-                  </div>
-                )}
-
-                {sourceExcerpt && (
-                  <div className="p-3 rounded-lg bg-[var(--surface-raised)]/60 border border-[var(--border-color)] space-y-1.5">
-                    <div className="flex items-center justify-between text-[11px] text-[var(--text-muted)]">
-                      <span className="font-semibold text-[var(--text-secondary)] flex items-center gap-1">
-                        <FileText className="h-3.5 w-3.5" aria-hidden="true" />
-                        <span>Source Provenance</span>
-                      </span>
-                      {primaryChunk?.pageStart && (
-                        <span>
-                          Page {primaryChunk.pageStart}
-                          {primaryChunk.pageEnd && primaryChunk.pageEnd !== primaryChunk.pageStart
-                            ? `–${primaryChunk.pageEnd}`
-                            : ''}
-                        </span>
-                      )}
-                    </div>
-                    <p className="text-xs text-[var(--text-secondary)] italic leading-relaxed">
-                      &quot;{sourceExcerpt.fullExcerpt}&quot;
-                    </p>
-                  </div>
-                )}
-              </CardContent>
-            </Card>
-          </section>
-        )}
-
-        {/* Active Recall Question Card */}
-        {currentQuestion &&
-          (machineState === 'WAITING_FOR_ANSWER' || machineState === 'EVALUATING') && (
-            <section aria-labelledby="active-recall-question">
-              <QuestionCard
-                question={currentQuestion}
-                draftAnswer={draftAnswer}
-                selectedConfidence={selectedConfidence}
-                onAnswerChange={setDraftAnswer}
-                onConfidenceChange={setSelectedConfidence}
-                onSubmit={handleSubmitAnswer}
-                isLoading={isLoading}
-                isFallback={isFallbackQuestion}
-                onTryAnotherQuestion={handleRequestQuestion}
-              />
-            </section>
+      {/* 2. Responsive Two-Column Layout (Desktop: 2/3 Main Column, 1/3 Sidebar) */}
+      <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 lg:gap-8 items-start">
+        {/* Main Column (8/12 on desktop): Lesson & Dialogue */}
+        <main
+          className="lg:col-span-8 space-y-6 focus:outline-none"
+          tabIndex={-1}
+          ref={headingRef}
+          aria-label="Active learning activity"
+        >
+          {effectiveMode === 'study' && (
+            <StudySessionView
+              concept={activeConcept}
+              unit={currentUnit}
+              messages={messages}
+              isLoading={isTeachingLoading}
+              error={teachingError}
+              onSendMessage={(text) => teachConceptTurn(text, 'teach')}
+              onExplainDifferently={(diffMode) => teachConceptTurn(undefined, diffMode)}
+              onReadyForRecall={handleReadyForRecall}
+              onContinue={handleContinue}
+              onRetry={() => teachConceptTurn(undefined, 'teach')}
+              onCancelRequest={cancelInFlight}
+              onExit={handleExit}
+              onReturnToStep2={() => router.push(`/learn/${materialId}/organise`)}
+            />
           )}
 
-        {/* Revision Refresher Explanation */}
-        {revisionExplanation && (
-          <section aria-labelledby="revision-refresher-heading">
-            <Card className="border-[var(--warning)]/40 bg-[var(--surface)] shadow-md">
-              <CardHeader className="pb-3 border-b border-[var(--border-color)]">
-                <div className="flex items-center gap-2">
-                  <BookOpen className="h-4 w-4 text-[var(--warning)]" aria-hidden="true" />
-                  <CardTitle
-                    id="revision-refresher-heading"
-                    className="text-sm sm:text-base font-semibold text-[var(--text-primary)]"
-                  >
-                    Simplified Refresher: {concept?.title}
-                  </CardTitle>
-                </div>
-              </CardHeader>
-              <CardContent className="pt-4 space-y-3">
-                <SafeMarkdown
-                  content={revisionExplanation}
-                  className="text-sm leading-relaxed text-[var(--text-primary)]"
-                />
-                <div className="pt-2 flex items-center justify-end">
-                  <Button
-                    variant="primary"
-                    size="sm"
-                    onClick={handleRequestQuestion}
-                    disabled={isLoading || isRevisionLoading}
-                    isLoading={isRevisionLoading}
-                    className="text-xs h-8"
-                  >
-                    <span>Test Recall at Guided Level &rarr;</span>
-                  </Button>
-                </div>
-              </CardContent>
-            </Card>
-          </section>
-        )}
-
-        {/* Evaluation Feedback */}
-        {lastEvaluation &&
-          (machineState === 'FEEDBACK' ||
-            machineState === 'REVISION_DUE' ||
-            machineState === 'NEXT_CONCEPT') && (
-            <section aria-labelledby="recall-feedback">
-              <FeedbackCard
-                evaluation={lastEvaluation}
-                weakPrerequisite={
-                  revisionPlan?.weakPrerequisite
-                    ? {
-                        id: revisionPlan.weakPrerequisite.id,
-                        title: revisionPlan.weakPrerequisite.title,
-                      }
-                    : undefined
-                }
-                onContinue={handleContinue}
-                onRevise={handleRevise}
-                onTryAgain={handleTryAgain}
-                onSelectPrerequisite={handleSelectConcept}
-              />
-            </section>
+          {effectiveMode === 'recall' && (
+            <RecallSessionView
+              concept={activeConcept}
+              unit={currentUnit}
+              machineState={machineState}
+              currentQuestion={currentQuestion}
+              draftAnswer={draftAnswer}
+              selectedConfidence={selectedConfidence}
+              lastEvaluation={lastEvaluation}
+              isFallbackQuestion={isFallbackQuestion}
+              revisionPlan={revisionPlan}
+              isLoading={isMachineLoading}
+              onRequestQuestion={handleRequestQuestion}
+              onAnswerChange={setDraftAnswer}
+              onConfidenceChange={setSelectedConfidence}
+              onSubmitAnswer={handleSubmitAnswer}
+              onContinue={handleContinue}
+              onTryAgain={handleTryAgain}
+              onRevise={handleRevise}
+              onSelectConcept={handleSelectConcept}
+            />
           )}
 
-        {/* Context Action Bar */}
-        <ContextActionBar
-          machineState={machineState}
-          onReadyForRecall={handleReadyForRecall}
-          onRequestQuestion={handleRequestQuestion}
-          onContinue={handleContinue}
-          onTryAgain={handleTryAgain}
-          onRevise={handleRevise}
-          onReviewLater={handleReviewLater}
-          isLoading={isLoading}
-        />
+          {effectiveMode === 'revision' && (
+            <RevisionSessionView
+              concept={activeConcept}
+              unit={currentUnit}
+              machineState={machineState}
+              currentQuestion={currentQuestion}
+              draftAnswer={draftAnswer}
+              selectedConfidence={selectedConfidence}
+              lastEvaluation={lastEvaluation}
+              isFallbackQuestion={isFallbackQuestion}
+              revisionPlan={revisionPlan}
+              isLoading={isMachineLoading}
+              dueCount={dueCount}
+              nextDueText={nextDueText}
+              nextScheduledReviewDate={nextScheduledReviewDate}
+              onRequestQuestion={handleRequestQuestion}
+              onAnswerChange={setDraftAnswer}
+              onConfidenceChange={setSelectedConfidence}
+              onSubmitAnswer={handleSubmitAnswer}
+              onContinue={handleContinue}
+              onTryAgain={handleTryAgain}
+              onRevise={handleRevise}
+              onSelectConcept={handleSelectConcept}
+              onSwitchToStudy={handleSwitchToStudy}
+              onSwitchToRecall={handleSwitchToRecall}
+              onExit={handleExit}
+            />
+          )}
+        </main>
+
+        {/* Secondary Column (4/12 on desktop): Concept Overview, Grounding, Prerequisites & Mastery */}
+        <div className="lg:col-span-4 lg:sticky lg:top-6">
+          <SessionSidebar
+            concept={activeConcept}
+            document={document}
+            sourceChunks={sourceChunks}
+            prerequisites={prereqStatuses}
+            mastery={currentMastery}
+            sourceMode={session?.sourceMode ?? 'document'}
+          />
+        </div>
       </div>
     </div>
   );

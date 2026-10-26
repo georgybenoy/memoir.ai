@@ -22,10 +22,12 @@ import {
   type DocumentRecord,
   type DocumentChunkRecord,
   type RecallQuestionRecord,
+  type ConversationMessageRecord,
   type StudySessionRecord,
   type MasteryStateRecord,
   type SpacedRepetitionStateRecord,
 } from '@/types/domain';
+import { teachConcept } from '@/features/concepts/teaching-service';
 import { calculateAdaptiveDifficulty } from '@/features/recall/difficulty';
 import { getOrGenerateRecallQuestion } from '@/features/recall/question-service';
 import {
@@ -136,8 +138,11 @@ export function useLearningSession(options: UseLearningSessionOptions = {}) {
   const [machineState, setMachineState] = React.useState<MachineState>('IDLE');
   const machineStateRef = React.useRef<MachineState>('IDLE');
   const [concept, setConcept] = React.useState<ConceptRecord | null>(null);
+  const conceptRef = React.useRef<ConceptRecord | null>(null);
+  const initialLessonTriggeredRef = React.useRef<string | null>(null);
   const [document, setDocument] = React.useState<DocumentRecord | null>(null);
   const [sourceChunks, setSourceChunks] = React.useState<DocumentChunkRecord[]>([]);
+  const [messages, setMessages] = React.useState<ConversationMessageRecord[]>([]);
   const [currentQuestion, setCurrentQuestion] = React.useState<RecallQuestionRecord | null>(null);
   const [draftAnswer, setDraftAnswerState] = React.useState<string>('');
   const [selectedConfidence, setSelectedConfidenceState] = React.useState<1 | 2 | 3 | null>(null);
@@ -149,6 +154,8 @@ export function useLearningSession(options: UseLearningSessionOptions = {}) {
 
   // Status & Notifications
   const [isLoading, setIsLoading] = React.useState(false);
+  const [isTeachingLoading, setIsTeachingLoading] = React.useState(false);
+  const [teachingError, setTeachingError] = React.useState<string | null>(null);
   const [error, setError] = React.useState<string | null>(null);
   const [restoredNotice, setRestoredNotice] = React.useState<string | null>(null);
 
@@ -172,7 +179,12 @@ export function useLearningSession(options: UseLearningSessionOptions = {}) {
     setIsLoading(false);
   }, []);
 
-  // Cancel on unmount or concept change
+  const sessionRef = React.useRef<StudySessionRecord | null>(null);
+  React.useEffect(() => {
+    sessionRef.current = session;
+  }, [session]);
+
+  // Cancel on unmount
   React.useEffect(() => {
     return () => {
       cancelInFlight();
@@ -180,7 +192,86 @@ export function useLearningSession(options: UseLearningSessionOptions = {}) {
         clearTimeout(debounceTimerRef.current);
       }
     };
-  }, [cancelInFlight, activeConceptId]);
+  }, [cancelInFlight]);
+
+  // In-flight teaching operations helper
+  const teachConceptTurnInternal = React.useCallback(
+    async (
+      targetConcept: ConceptRecord,
+      userMessage?: string,
+      explainMode: 'teach' | 'simplify' | 'analogy' | 'example' = 'teach',
+    ) => {
+      if (!activeSessionId) return;
+
+      setIsTeachingLoading(true);
+      setTeachingError(null);
+      const controller = new AbortController();
+      abortControllerRef.current = controller;
+      const requestId = generateId();
+      activeRequestIdRef.current = requestId;
+
+      const timeoutId = setTimeout(() => {
+        if (activeRequestIdRef.current === requestId) {
+          controller.abort();
+          setIsTeachingLoading(false);
+          setTeachingError('The tutor request timed out. You can retry or view the stored explanation.');
+        }
+      }, 25000);
+
+      try {
+        const result = await teachConcept({
+          conceptId: targetConcept.id,
+          sessionId: activeSessionId,
+          userMessage,
+          sourceMode: sessionRef.current?.sourceMode ?? 'document',
+          mode: explainMode,
+          signal: controller.signal,
+          dbName: options.dbName,
+        });
+
+        clearTimeout(timeoutId);
+        if (activeRequestIdRef.current !== requestId) return;
+
+        if (result.fallbackUsed) {
+          setTeachingError('The AI tutor is temporarily unavailable. Below is the stored canonical explanation from your study notes.');
+        } else {
+          setTeachingError(null);
+        }
+
+        const db = await openDatabase(options.dbName);
+        const updated = (await db.getAllFromIndex(
+          'conversationMessages',
+          'by-session',
+          activeSessionId,
+        )) as ConversationMessageRecord[];
+        updated.sort((a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime());
+        setMessages(updated);
+      } catch (err) {
+        clearTimeout(timeoutId);
+        if (activeRequestIdRef.current === requestId) {
+          const msg = err instanceof Error ? err.message : String(err);
+          console.error('Teaching turn error:', err);
+          setTeachingError(msg);
+        }
+      } finally {
+        clearTimeout(timeoutId);
+        if (activeRequestIdRef.current === requestId) {
+          setIsTeachingLoading(false);
+          abortControllerRef.current = null;
+        }
+      }
+    },
+    [activeSessionId, options.dbName],
+  );
+
+  const teachConceptTurn = React.useCallback(
+    async (userMessage?: string, explainMode: 'teach' | 'simplify' | 'analogy' | 'example' = 'teach') => {
+      const active = conceptRef.current;
+      if (!active) return;
+      await teachConceptTurnInternal(active, userMessage, explainMode);
+    },
+    [teachConceptTurnInternal],
+  );
 
   // Initial session load on mount or sessionId change
   React.useEffect(() => {
@@ -205,15 +296,38 @@ export function useLearningSession(options: UseLearningSessionOptions = {}) {
     }
 
     loadSessionWithContext(activeSessionId, options.dbName)
-      .then((context) => {
+      .then(async (context) => {
         if (isCancelled || !context) return;
         setSession(context.session);
-        const loadedState = context.session.machineState as MachineState;
+        let loadedState = context.session.machineState as MachineState;
+
+        // Concept resolution: if not present in session, fall back to options.conceptId or store
+        let resolvedConcept = context.concept;
+        if (!resolvedConcept && activeConceptId) {
+          try {
+            const db = await openDatabase(options.dbName);
+            resolvedConcept = ((await db.get('concepts', activeConceptId)) as ConceptRecord) ?? null;
+          } catch {
+            // ignore
+          }
+        }
+
+        // On-Mount Start Guard: If machineState is stuck in IDLE and we have an in-scope concept,
+        // automatically transition to STUDYING_CONCEPT (or WAITING_FOR_RECALL if mode is recall).
+        if (loadedState === 'IDLE' && resolvedConcept) {
+          const isRecall = context.session.mode === 'recall';
+          const targetState: MachineState = isRecall ? 'WAITING_FOR_RECALL' : 'STUDYING_CONCEPT';
+          loadedState = targetState;
+          void persistMachineState(activeSessionId, targetState, resolvedConcept.id, options.dbName);
+        }
+
         machineStateRef.current = loadedState;
         setMachineState(loadedState);
-        setConcept(context.concept);
+        setConcept(resolvedConcept);
+        conceptRef.current = resolvedConcept;
         setDocument(context.document);
         setSourceChunks(context.sourceChunks);
+        setMessages(context.messages ?? []);
         setCurrentQuestion(context.latestQuestion);
         setDraftAnswerState(context.session.draftAnswer ?? '');
         setSelectedConfidenceState(
@@ -247,6 +361,17 @@ export function useLearningSession(options: UseLearningSessionOptions = {}) {
             `Session restored to ${context.session.machineState}. Prior in-flight operation was rolled back safely.`,
           );
         }
+
+        // Auto-trigger initial Socratic teaching turn if study mode and no messages yet
+        if (
+          resolvedConcept &&
+          (context.session.mode === 'study' || (!context.session.mode && loadedState === 'STUDYING_CONCEPT')) &&
+          (!context.messages || context.messages.length === 0) &&
+          initialLessonTriggeredRef.current !== `${activeSessionId}-${resolvedConcept.id}`
+        ) {
+          initialLessonTriggeredRef.current = `${activeSessionId}-${resolvedConcept.id}`;
+          void teachConceptTurnInternal(resolvedConcept, undefined, 'teach');
+        }
       })
       .catch((err) => {
         if (isCancelled) return;
@@ -257,7 +382,7 @@ export function useLearningSession(options: UseLearningSessionOptions = {}) {
     return () => {
       isCancelled = true;
     };
-  }, [activeSessionId, options.dbName]);
+  }, [activeSessionId, activeConceptId, teachConceptTurnInternal, options.dbName]);
 
   // Manual reload session helper
   const reloadSession = React.useCallback(async () => {
@@ -273,8 +398,10 @@ export function useLearningSession(options: UseLearningSessionOptions = {}) {
         machineStateRef.current = loadedState;
         setMachineState(loadedState);
         setConcept(context.concept);
+        conceptRef.current = context.concept;
         setDocument(context.document);
         setSourceChunks(context.sourceChunks);
+        setMessages(context.messages ?? []);
         setCurrentQuestion(context.latestQuestion);
         setDraftAnswerState(context.session.draftAnswer ?? '');
         setSelectedConfidenceState(
@@ -588,8 +715,23 @@ export function useLearningSession(options: UseLearningSessionOptions = {}) {
 
   // Action: "Try again"
   const handleTryAgain = React.useCallback(async () => {
-    await dispatch({ type: 'TRY_AGAIN' });
-  }, [dispatch]);
+    setDraftAnswerState('');
+    setSelectedConfidenceState(null);
+    setLastEvaluation(null);
+    if (activeSessionId) {
+      persistDraftAnswer(activeSessionId, '', options.dbName).catch(() => {});
+      persistSelectedConfidence(activeSessionId, null, options.dbName).catch(() => {});
+    }
+    if (currentQuestion && (sessionRef.current?.mode === 'recall' || sessionRef.current?.mode === 'revision')) {
+      machineStateRef.current = 'WAITING_FOR_ANSWER';
+      setMachineState('WAITING_FOR_ANSWER');
+      if (activeSessionId) {
+        await persistMachineState(activeSessionId, 'WAITING_FOR_ANSWER', concept?.id, options.dbName);
+      }
+    } else {
+      await dispatch({ type: 'TRY_AGAIN' });
+    }
+  }, [dispatch, activeSessionId, concept?.id, currentQuestion, options.dbName]);
 
   // Action: "Revise"
   const handleRevise = React.useCallback(async () => {
@@ -632,6 +774,7 @@ export function useLearningSession(options: UseLearningSessionOptions = {}) {
     concept,
     document,
     sourceChunks,
+    messages,
     currentQuestion,
     draftAnswer,
     selectedConfidence,
@@ -643,6 +786,10 @@ export function useLearningSession(options: UseLearningSessionOptions = {}) {
     revisionExplanation,
     isRevisionLoading,
 
+    // Teaching State & Dialogue
+    isTeachingLoading,
+    teachingError,
+
     // Status & Error
     isLoading,
     error,
@@ -650,6 +797,8 @@ export function useLearningSession(options: UseLearningSessionOptions = {}) {
     clearRestoredNotice: () => setRestoredNotice(null),
 
     // Actions
+    teachConceptTurn,
+    cancelInFlight,
     setDraftAnswer,
     setSelectedConfidence,
     handleReadyForRecall,

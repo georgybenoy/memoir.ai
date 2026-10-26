@@ -53,6 +53,18 @@ Running list of tasks that only a human can perform. Agents append items here an
   ```
   Confirm live structured concept extraction and rubric evaluations against Google AI Studio servers.
 - [ ] **Phase R6 Physical Device Stepper and Virtual Keyboard Verification** — On physical iOS Safari and Android Chrome devices, perform the First-Time Learner (Scenario 1) and Recall Evaluation (Scenario 2) flows to confirm that opening the on-screen virtual keyboard does not obscure the answer textarea, that tap targets meet the 44×44px touch criterion, and that browser tab suspension does not clear IndexedDB draft state.
+- [ ] **Step 4 Learning-Session UI Live Gemini Interactive Audit** — With a real `GEMINI_API_KEY` set in `.env.local` or on Vercel:
+  1. Open a study session in Step 4 (`/learn/[materialId]/session/[sessionId]`).
+  2. Verify that the AI tutor delivers real-time Socratic dialogue with varied avatar expressions.
+  3. Use the "Explain differently" dropdown to test `Analogy`, `Example`, and `Simplify` with the live model.
+  4. In Recall mode, generate a practice question, submit an answer, and verify that live rubric scores and semantic evaluation are returned.
+  5. Verify that network disconnect cleanly triggers the "Tutor explanation unavailable" banner and offers stored canonical fallback.
+- [ ] **Pomodoro Timer Audio Chime & Browser Notification Verification on Physical Devices**:
+  1. Open a Study session in Step 4 on a physical desktop browser (Chrome/Edge, Safari, Firefox) and mobile phone (iOS Safari, Android Chrome).
+  2. In the Pomodoro popover, toggle "Soft chime" ON and start a 1-minute test session. Verify the Web Audio sine chime plays gently on completion after user gesture, and fails silently without console exceptions if audio context is blocked.
+  3. Toggle "Browser notification" ON: confirm browser native permission prompt triggers only when the checkbox is toggled. Switch to a different tab; verify the native browser notification fires when time expires while the document is hidden.
+  4. Test laptop sleep/wake behavior: start a 5-minute focus timer, close the laptop lid for 7 minutes, and reopen. Verify the timer correctly detects elapsed clock time upon wake, transitions directly to the completed state with the message *"Your focus session finished while you were away"*, and does NOT fire a retroactive alarm sound.
+
 
 
 

@@ -73,6 +73,8 @@ ${concept.keyTerms && concept.keyTerms.length > 0 ? `Key Terms: ${concept.keyTer
       }
 
       const isSimplify = data.mode === 'simplify';
+      const isAnalogy = data.mode === 'analogy';
+      const isExample = data.mode === 'example';
       const focusList = data.focus ?? data.focusPoints ?? [];
       let simplifyNote = '';
       if (isSimplify) {
@@ -81,6 +83,10 @@ ${concept.keyTerms && concept.keyTerms.length > 0 ? `Key Terms: ${concept.keyTer
             ? `\nKey points the student missed that MUST be clarified in intuitive terms:\n${focusList.map((f) => `- ${sanitizeTagContent(f, 'focus_point')}`).join('\n')}`
             : '';
         simplifyNote = `\nREVISION MODE (SIMPLIFIED RE-EXPLANATION): The student struggled with this concept on a recent active recall test. Break this concept down into very intuitive, easily understandable steps with everyday analogies. Avoid overly dense academic jargon.${focusItems}\n`;
+      } else if (isAnalogy) {
+        simplifyNote = `\nALTERNATIVE EXPLANATION (EVERYDAY ANALOGY): The student requested an alternate explanation. Break this concept down using a vivid, relatable real-world analogy and intuitive mental model. Avoid repeating textbook definitions.\n`;
+      } else if (isExample) {
+        simplifyNote = `\nALTERNATIVE EXPLANATION (CONCRETE WALKTHROUGH): The student requested a concrete example. Walk step-by-step through a practical, real-world scenario or case study that clearly demonstrates how this concept and its mechanism function.\n`;
       }
 
       const instructionNote = isTopicModeWithoutChunks

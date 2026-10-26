@@ -343,5 +343,83 @@ describe('AI API Routes (health, extract-concepts, explain-concept)', () => {
       expect(promptString).toContain('REVISION MODE (SIMPLIFIED RE-EXPLANATION)');
       expect(promptString).toContain('timer interrupts');
     });
+
+    it('accepts mode: "analogy" and embeds everyday analogy directives in prompt', async () => {
+      const mockResponse = {
+        message: 'Think of virtual memory like a library desk with limited space...',
+        expression: 'explaining',
+        grounded: true,
+        citedChunkIds: ['ch-1'],
+        followUpQuestion: 'How does the librarian swapping books relate to page faults?',
+      };
+
+      const mockGenerate = vi.fn().mockResolvedValue({
+        text: JSON.stringify(mockResponse),
+      });
+
+      _setGeminiClient({
+        models: { generateContent: mockGenerate },
+      } as unknown as GoogleGenAI);
+
+      const req = new Request('http://localhost/api/ai/explain-concept', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          concept: {
+            title: 'Virtual Memory & Paging',
+            summary: 'Mapping virtual addresses to physical frames.',
+          },
+          sourceChunks: [{ id: 'ch-1', text: 'Page tables map virtual to physical pages.' }],
+          sourceMode: 'document',
+          mode: 'analogy',
+        }),
+      });
+
+      const res = await explainConceptHandler(req);
+      expect(res.status).toBe(200);
+
+      const callArg = mockGenerate.mock.calls[0][0];
+      const promptString = JSON.stringify(callArg);
+      expect(promptString).toContain('ALTERNATIVE EXPLANATION (EVERYDAY ANALOGY)');
+    });
+
+    it('accepts mode: "example" and embeds concrete walkthrough directives in prompt', async () => {
+      const mockResponse = {
+        message: 'Here is a concrete walkthrough of a process fork call...',
+        expression: 'explaining',
+        grounded: true,
+        citedChunkIds: ['ch-1'],
+        followUpQuestion: 'What return value did the parent process receive?',
+      };
+
+      const mockGenerate = vi.fn().mockResolvedValue({
+        text: JSON.stringify(mockResponse),
+      });
+
+      _setGeminiClient({
+        models: { generateContent: mockGenerate },
+      } as unknown as GoogleGenAI);
+
+      const req = new Request('http://localhost/api/ai/explain-concept', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          concept: {
+            title: 'Process Forking',
+            summary: 'Creating child processes via fork system call.',
+          },
+          sourceChunks: [{ id: 'ch-1', text: 'fork() clones the calling process.' }],
+          sourceMode: 'document',
+          mode: 'example',
+        }),
+      });
+
+      const res = await explainConceptHandler(req);
+      expect(res.status).toBe(200);
+
+      const callArg = mockGenerate.mock.calls[0][0];
+      const promptString = JSON.stringify(callArg);
+      expect(promptString).toContain('ALTERNATIVE EXPLANATION (CONCRETE WALKTHROUGH)');
+    });
   });
 });
