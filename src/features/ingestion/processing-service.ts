@@ -20,6 +20,7 @@ import { buildLearningUnits } from '@/features/learning-units/builder';
 import { fetchExtractConcepts } from '@/lib/ai/client';
 import { type ExtractedConceptDto } from '@/lib/ai/schemas';
 import { evaluateBlobStorage, computeFileHash, computeContentHash } from './duplicates';
+import { type ExtractedHeading } from './types';
 
 export interface ProcessMaterialOptions {
   file: {
@@ -118,7 +119,7 @@ export async function processMaterialLifecycle(
 
     let chunks: DocumentChunkRecord[] = [];
     let contentHash = existingDoc?.contentHash ?? '';
-    let extractedHeadings: string[] | undefined = (existingDoc?.metadata?.headings as string[] | undefined) ?? [];
+    let extractedHeadings: ExtractedHeading[] | undefined = (existingDoc?.metadata?.headings as ExtractedHeading[] | undefined) ?? [];
 
     if (existingDoc && existingChunks.length > 0) {
       // Document is already validated, extracted, and chunked! Skip stages 1-5 to resume directly
@@ -421,7 +422,7 @@ export async function processMaterialLifecycle(
       concepts: orderedConcepts,
       dependencies: finalDependencies,
       chunks,
-      headings: extractedHeadings ?? (existingDoc?.metadata?.headings as string[] | undefined),
+      headings: extractedHeadings ?? (existingDoc?.metadata?.headings as ExtractedHeading[] | undefined),
       docTitle: file.name,
     });
 

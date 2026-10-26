@@ -61,12 +61,12 @@ EduMentor is engineered on four pillars of empirical cognitive psychology:
 ┌─────────────────────────────────────────────────────────────────────────┐
 │                       PEDAGOGICAL PILLARS                               │
 ├───────────────────┬───────────────────┬────────────────┬────────────────┤
-│ 1. Active Recall  │ 2. Spaced         │ 3. Prerequisite│ 4. Metacognitive│
-│    (Testing Effect)│   Repetition      │    Sequencing  │    Calibration │
+│ 1. Active Recall  │ 2. Spaced         │ 3. Prerequisite│ 4.Metacognitive│
+│   (Testing Effect)│   Repetition      │    Sequencing  │    Calibration │
 ├───────────────────┼───────────────────┼────────────────┼────────────────┤
 │ Roediger &        │ Ebbinghaus (1885) │ Bloom's        │ Flavell (1979) │
 │ Karpicke (2006)   │ Wozniak (SM-2)    │ Taxonomy & DAG │ Brier Score    │
-│ Retrieving memory │ Expanding intervals│ Master basics  │ Calibrate      │
+│ Retrieving memory │ Expanding intervals│ Master basics │ Calibrate      │
 │ strengthens neural│ halt exponential  │ before advanced│ confidence vs  │
 │ pathways.         │ memory decay.     │ topics.        │ actual ability.│
 └───────────────────┴───────────────────┴────────────────┴────────────────┘
