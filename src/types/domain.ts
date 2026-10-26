@@ -125,6 +125,7 @@ export interface LearningUnitRecord {
 export interface MaterialProcessingRecord {
   id: string; // materialId
   materialId: string;
+  runId?: string; // Unique execution run identifier
   stage: ProcessingStage;
   currentStage?: ProcessingStage;
   progressPercent: number; // 0-100

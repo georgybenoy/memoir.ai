@@ -216,39 +216,64 @@ export function Step1AddMaterial({ onMaterialSelected, className }: Step1AddMate
 
   // Confirm and start ingestion pipeline
   const [isSubmitting, setIsSubmitting] = React.useState(false);
+  const isSubmittingRef = React.useRef(false);
+
   const handleConfirmAndProcess = async () => {
-    if (!file) return;
+    if (!file || isSubmittingRef.current || isSubmitting) return;
+    isSubmittingRef.current = true;
     setIsSubmitting(true);
+    let navigated = false;
+
     try {
       const { processMaterialLifecycle } = await import('@/features/ingestion/processing-service');
       const repos = getStorage();
-      const result = await processMaterialLifecycle({
+
+      const runPromise = processMaterialLifecycle({
         file,
         customRepos: repos,
+        onProgress: (progress) => {
+          // As soon as document and chunks are saved to storage (Stage 5 SAVED or higher),
+          // transition immediately to Step 2 so the user sees live analysis, batch counters, and progress
+          if (
+            !navigated &&
+            progress.materialId &&
+            (progress.stage === 'SAVED' ||
+              progress.stage === 'ANALYZING' ||
+              progress.stage === 'COMPLETE')
+          ) {
+            navigated = true;
+            onMaterialSelected?.(progress.materialId);
+            router.push(`/learn/${progress.materialId}/organise`);
+          }
+        },
       });
 
-      if (result.success) {
-        onMaterialSelected?.(result.materialId);
-        router.push(`/learn/${result.materialId}/organise`);
-      } else {
-        // Even if Gemini analysis fails later in lifecycle, source text is saved. Navigate to Step 2 to show retryable state
+      const result = await runPromise;
+
+      if (!navigated) {
         if (result.materialId) {
+          navigated = true;
+          onMaterialSelected?.(result.materialId);
           router.push(`/learn/${result.materialId}/organise`);
         } else {
           setValidationError(result.error ?? 'Processing failed.');
           setIsSubmitting(false);
+          isSubmittingRef.current = false;
         }
       }
     } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
-      if (/quota/i.test(msg)) {
-        setValidationError(
-          'Local browser storage limit reached (QuotaExceededError). Please export or delete old materials in Settings before uploading new documents.'
-        );
-      } else {
-        setValidationError(`Processing error: ${msg}`);
+      if (!navigated) {
+        const msg = err instanceof Error ? err.message : String(err);
+        if (/quota/i.test(msg)) {
+          setValidationError(
+            'Local browser storage limit reached (QuotaExceededError). Please export or delete old materials in Settings before uploading new documents.'
+          );
+        } else {
+          setValidationError(`Processing error: ${msg}`);
+        }
+        setIsSubmitting(false);
+        isSubmittingRef.current = false;
       }
-      setIsSubmitting(false);
     }
   };
 

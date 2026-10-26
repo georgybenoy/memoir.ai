@@ -4,6 +4,7 @@ import {
   type MaterialProcessingRecord,
   type ProcessingStage,
   type MaterialFileRecord,
+  type ConceptRecord,
 } from '@/types/domain';
 import { generateId } from '@/lib/utils/id';
 import { nowISO } from '@/lib/utils/clock';
@@ -17,10 +18,12 @@ import { partitionChunksIntoBatches } from '@/features/concepts/pipeline';
 import { deduplicateConcepts, normalizeConceptTitle } from '@/features/concepts/deduplicate';
 import { buildDependencyGraph } from '@/features/dependency-graph';
 import { buildLearningUnits } from '@/features/learning-units/builder';
+import { planReplaceMaterialConcepts } from '@/features/learning-units/reprocess-replace';
 import { fetchExtractConcepts } from '@/lib/ai/client';
 import { type ExtractedConceptDto } from '@/lib/ai/schemas';
 import { evaluateBlobStorage, computeFileHash, computeContentHash } from './duplicates';
 import { type ExtractedHeading } from './types';
+import { processingJobManager } from './job-manager';
 
 export interface ProcessMaterialOptions {
   file: {
@@ -31,6 +34,7 @@ export interface ProcessMaterialOptions {
     arrayBuffer: () => Promise<ArrayBuffer>;
   };
   materialId?: string; // If replacing or resuming an existing material
+  runId?: string; // Optional unique execution run identifier
   subjectId?: string;
   chunkOptions?: ChunkOptions;
   signal?: AbortSignal;
@@ -54,6 +58,7 @@ export async function updateProcessingStage(
   const record: MaterialProcessingRecord = {
     id: materialId,
     materialId,
+    runId: details.runId ?? existing?.runId,
     stage,
     progressPercent: details.progressPercent ?? existing?.progressPercent ?? 0,
     message: details.message ?? existing?.message ?? `Stage: ${stage}`,
@@ -75,6 +80,7 @@ export async function updateProcessingStage(
   };
 
   await repos.processing.put(record);
+  processingJobManager.notify(materialId, record);
   return record;
 }
 
@@ -89,403 +95,526 @@ export async function updateProcessingStage(
 export async function processMaterialLifecycle(
   options: ProcessMaterialOptions,
 ): Promise<{ success: boolean; materialId: string; record: MaterialProcessingRecord; error?: string }> {
-  const { file, subjectId, chunkOptions, signal, onProgress, customRepos, throttleDelayMs } = options;
+  const { file, subjectId, chunkOptions, customRepos, throttleDelayMs } = options;
   const repos = customRepos ?? getStorage();
 
   const materialId = options.materialId ?? generateId();
-  let currentRunningStage: ProcessingStage = 'SELECTED';
+  const runId = options.runId ?? generateId();
 
-  // Helper to publish and persist progress
-  async function notifyStage(
-    stage: ProcessingStage,
-    details: Partial<MaterialProcessingRecord>,
-  ): Promise<MaterialProcessingRecord> {
-    currentRunningStage = stage;
-    const updated = await updateProcessingStage(materialId, stage, details, repos);
-    onProgress?.(updated);
-    return updated;
+  // If there is already an active in-flight job for this material, join it instead of spawning a duplicate!
+  const existingJob = processingJobManager.getJob<{
+    success: boolean;
+    materialId: string;
+    record: MaterialProcessingRecord;
+    error?: string;
+  }>(materialId);
+  if (existingJob) {
+    if (options.onProgress) {
+      existingJob.listeners.add(options.onProgress);
+    }
+    return existingJob.promise;
   }
 
-  try {
-    if (signal?.aborted) {
-      const rec = await notifyStage('CANCELLED', { message: 'Processing cancelled by user.' });
-      return { success: false, materialId, record: rec };
-    }
-
-    // Check existing processing record and saved data for resume
-    let procRecord = await repos.processing.get(materialId);
-    const existingDoc = await repos.documents.get(materialId);
-    const existingChunks = await repos.chunks.listByMaterial(materialId);
-
-    let chunks: DocumentChunkRecord[] = [];
-    let contentHash = existingDoc?.contentHash ?? '';
-    let extractedHeadings: ExtractedHeading[] | undefined = (existingDoc?.metadata?.headings as ExtractedHeading[] | undefined) ?? [];
-
-    if (existingDoc && existingChunks.length > 0) {
-      // Document is already validated, extracted, and chunked! Skip stages 1-5 to resume directly
-      chunks = existingChunks;
-      if (procRecord) {
-        currentRunningStage = procRecord.stage;
-      }
+  const internalController = new AbortController();
+  if (options.signal) {
+    if (options.signal.aborted) {
+      internalController.abort();
     } else {
-      // Read ArrayBuffer and maintain a clean clone so pdfjs-dist's Web Worker
-      // cannot detach/neuter the buffer used for Blob storage and hashes
-      const rawBuffer = await file.arrayBuffer();
-      const buffer = rawBuffer.slice(0);
-      const uint8 = new Uint8Array(buffer);
-      const fileHash = await computeFileHash(uint8);
+      options.signal.addEventListener('abort', () => internalController.abort(), { once: true });
+    }
+  }
 
-      // --- STAGE 1: SELECTED ---
-      if (!procRecord || procRecord.stage === 'SELECTED') {
-        procRecord = await notifyStage('SELECTED', {
-          progressPercent: 5,
-          message: `Selected file "${file.name}"`,
-          fileHash,
-        });
-      }
+  const runPromise = (async () => {
+    let currentRunningStage: ProcessingStage = 'SELECTED';
 
-      // --- STAGE 2: VALIDATED ---
-      const headerSample = uint8.slice(0, Math.min(uint8.length, 8192));
-      const validation = validateUploadFile(file.name, file.size, file.type, headerSample);
-      if (!validation.valid) {
-        const rec = await notifyStage('FAILED', {
-          progressPercent: 0,
-          failedStage: 'VALIDATED',
-          errorCode: validation.code ?? 'INVALID_FILE',
-          errorMessage: validation.error ?? 'File validation failed.',
-          retryable: false,
-        });
-        return { success: false, materialId, record: rec, error: validation.error };
-      }
+    // Helper to publish and persist progress
+    async function notifyStage(
+      stage: ProcessingStage,
+      details: Partial<MaterialProcessingRecord>,
+    ): Promise<MaterialProcessingRecord> {
+      currentRunningStage = stage;
+      const updated = await updateProcessingStage(materialId, stage, { ...details, runId }, repos);
+      options.onProgress?.(updated);
+      return updated;
+    }
 
-      procRecord = await notifyStage('VALIDATED', {
-        progressPercent: 15,
-        message: `Validated "${file.name}" (${(file.size / 1024).toFixed(1)} KB)`,
-      });
+    let procRecord: MaterialProcessingRecord | null | undefined;
 
-      if (signal?.aborted) {
-        const rec = await notifyStage('CANCELLED', { message: 'Cancelled after validation.' });
+    try {
+      if (internalController.signal.aborted) {
+        const rec = await notifyStage('CANCELLED', { message: 'Processing cancelled by user.' });
         return { success: false, materialId, record: rec };
       }
 
-      // --- STAGE 3: EXTRACTED ---
-      // Pass a clone to extractDocumentText so the original buffer remains intact for Blob storage
-      const extracted = await extractDocumentText(
-        new Uint8Array(buffer.slice(0)),
-        validation.fileType!,
-        file.name,
-        undefined,
-        signal,
-      );
+      // Check existing processing record and saved data for resume
+      procRecord = await repos.processing.get(materialId);
+      const existingDoc = await repos.documents.get(materialId);
+      const existingChunks = await repos.chunks.listByMaterial(materialId);
 
-      const normalized = normalizeDocument(extracted);
-      contentHash = await computeContentHash(normalized.text);
-      extractedHeadings = extracted.headings;
+      let chunks: DocumentChunkRecord[] = [];
+      let contentHash = existingDoc?.contentHash ?? '';
+      let extractedHeadings: ExtractedHeading[] | undefined = (existingDoc?.metadata?.headings as ExtractedHeading[] | undefined) ?? [];
 
-      procRecord = await notifyStage('EXTRACTED', {
-        progressPercent: 35,
-        message: `Extracted ${normalized.text.length} characters of study material.`,
-        contentHash,
-        contentVersion: contentHash,
-      });
+      if (existingDoc && existingChunks.length > 0) {
+        // Document is already validated, extracted, and chunked! Skip stages 1-5 to resume directly
+        chunks = existingChunks;
+        if (procRecord) {
+          currentRunningStage = procRecord.stage;
+        }
+      } else {
+        // Read ArrayBuffer and maintain a clean clone so pdfjs-dist's Web Worker
+        // cannot detach/neuter the buffer used for Blob storage and hashes
+        const rawBuffer = await file.arrayBuffer();
+        const buffer = rawBuffer.slice(0);
+        const uint8 = new Uint8Array(buffer);
+        const fileHash = await computeFileHash(uint8);
 
-      // --- STAGE 4: PREVIEWED ---
-      procRecord = await notifyStage('PREVIEWED', {
-        progressPercent: 45,
-        message: 'Document structure previewed and confirmed.',
-      });
+        // --- STAGE 1: SELECTED ---
+        if (!procRecord || procRecord.stage === 'SELECTED') {
+          procRecord = await notifyStage('SELECTED', {
+            progressPercent: 5,
+            message: `Selected file "${file.name}"`,
+            fileHash,
+          });
+        }
 
-      // --- STAGE 5: SAVED ---
-      chunks = await chunkDocument(normalized, materialId, chunkOptions);
+        // --- STAGE 2: VALIDATED ---
+        const headerSample = uint8.slice(0, Math.min(uint8.length, 8192));
+        const validation = validateUploadFile(file.name, file.size, file.type, headerSample);
+        if (!validation.valid) {
+          const rec = await notifyStage('FAILED', {
+            progressPercent: 0,
+            failedStage: 'VALIDATED',
+            errorCode: validation.code ?? 'INVALID_FILE',
+            errorMessage: validation.error ?? 'File validation failed.',
+            retryable: false,
+          });
+          return { success: false, materialId, record: rec, error: validation.error };
+        }
 
-      const now = nowISO();
-      const docRecord: DocumentRecord = {
-        id: materialId,
-        materialId,
-        subjectId,
-        filename: file.name,
-        fileType: validation.fileType!,
-        fileSize: file.size,
-        extractedText: normalized.text,
-        analysisStatus: 'pending',
-        fileHash,
-        contentHash,
-        contentVersion: contentHash,
-        promptVersion: '1.0',
-        metadata: {
-          originalFilename: file.name,
-          fileSize: file.size,
-          pageCount: extracted.metadata.pageCount,
-          rawCharCount: extracted.rawText.length,
-          normalizedCharCount: normalized.normalizedCharCount,
-          chunkCount: chunks.length,
-          headings: extracted.headings ?? [],
-          ...extracted.metadata,
-        },
-        createdAt: existingDoc?.createdAt ?? now,
-        updatedAt: now,
-      };
+        procRecord = await notifyStage('VALIDATED', {
+          progressPercent: 15,
+          message: `Validated "${file.name}" (${(file.size / 1024).toFixed(1)} KB)`,
+        });
 
-      // Set materialId on each chunk
-      for (const ch of chunks) {
-        ch.materialId = materialId;
-        ch.contentVersion = contentHash;
-      }
+        if (internalController.signal.aborted) {
+          const rec = await notifyStage('CANCELLED', { message: 'Cancelled after validation.' });
+          return { success: false, materialId, record: rec };
+        }
 
-      // Check blob storage cap (10 MiB) - ensure fresh clone so buffer is not neutered
-      const blobDecision = evaluateBlobStorage(file.size);
-      if (blobDecision.storeBlob && buffer.byteLength > 0) {
-        const fileRecord: MaterialFileRecord = {
+        // --- STAGE 3: EXTRACTED ---
+        const extracted = await extractDocumentText(
+          new Uint8Array(buffer.slice(0)),
+          validation.fileType!,
+          file.name,
+          undefined,
+          internalController.signal,
+        );
+
+        const normalized = normalizeDocument(extracted);
+        if (normalized.text.trim().length === 0) {
+          const rec = await notifyStage('FAILED', {
+            progressPercent: 0,
+            failedStage: 'EXTRACTED',
+            errorCode: 'EMPTY_TEXT',
+            errorMessage: 'Document contains no readable text.',
+            retryable: false,
+          });
+          return { success: false, materialId, record: rec, error: 'Document contains no readable text.' };
+        }
+
+        contentHash = await computeContentHash(normalized.text);
+        extractedHeadings = extracted.headings;
+
+        procRecord = await notifyStage('EXTRACTED', {
+          progressPercent: 35,
+          message: `Extracted ${normalized.text.length} characters of study material.`,
+          contentHash,
+          contentVersion: contentHash,
+        });
+
+        // --- STAGE 4: PREVIEWED ---
+        procRecord = await notifyStage('PREVIEWED', {
+          progressPercent: 45,
+          message: 'Document structure previewed and confirmed.',
+        });
+
+        // --- STAGE 5: SAVED ---
+        chunks = await chunkDocument(normalized, materialId, chunkOptions);
+
+        const now = nowISO();
+        const docRecord: DocumentRecord = {
           id: materialId,
+          materialId,
+          subjectId,
           filename: file.name,
-          mimeType: file.type || validation.mimeType || 'application/octet-stream',
-          size: file.size,
-          blob: new Blob([buffer.slice(0)], { type: file.type || validation.mimeType }),
-          createdAt: now,
+          fileType: validation.fileType!,
+          fileSize: file.size,
+          extractedText: normalized.text,
+          analysisStatus: 'pending',
+          fileHash,
+          contentHash,
+          contentVersion: contentHash,
+          promptVersion: '1.0',
+          metadata: {
+            originalFilename: file.name,
+            fileSize: file.size,
+            pageCount: extracted.metadata.pageCount,
+            rawCharCount: extracted.rawText.length,
+            normalizedCharCount: normalized.normalizedCharCount,
+            chunkCount: chunks.length,
+            headings: extracted.headings ?? [],
+            ...extracted.metadata,
+          },
+          createdAt: existingDoc?.createdAt ?? now,
+          updatedAt: now,
         };
-        await repos.materialFiles.put(fileRecord);
-      }
 
-      await repos.documents.put(docRecord);
-      await repos.chunks.putMany(chunks);
+        for (const ch of chunks) {
+          ch.materialId = materialId;
+          ch.contentVersion = contentHash;
+        }
 
-      procRecord = await notifyStage('SAVED', {
-        progressPercent: 60,
-        message: `Saved ${chunks.length} study chunks to local library.`,
-        counts: {
-          totalChunks: chunks.length,
-          extractedConcepts: 0,
-          totalUnits: 0,
-        },
-      });
-    }
+        const blobDecision = evaluateBlobStorage(file.size);
+        if (blobDecision.storeBlob && buffer.byteLength > 0) {
+          const fileRecord: MaterialFileRecord = {
+            id: materialId,
+            filename: file.name,
+            mimeType: file.type || validation.mimeType || 'application/octet-stream',
+            size: file.size,
+            blob: new Blob([buffer.slice(0)], { type: file.type || validation.mimeType }),
+            createdAt: now,
+          };
+          await repos.materialFiles.put(fileRecord);
+        }
 
-    if (signal?.aborted) {
-      const rec = await notifyStage('CANCELLED', { message: 'Cancelled after saving chunks.' });
-      return { success: false, materialId, record: rec };
-    }
+        await repos.documents.put(docRecord);
+        await repos.chunks.putMany(chunks);
 
-    // --- STAGE 6: ANALYZING (Checkpoint & Resume with 5 RPM Rate-Limit Throttling) ---
-    currentRunningStage = 'ANALYZING';
-    const batches = partitionChunksIntoBatches(chunks);
-    const analyzedIndices = new Set<number>(procRecord?.analyzedBatchIndices ?? []);
-    const accumulated = [...((procRecord?.accumulatedConcepts as unknown as ExtractedConceptDto[]) ?? [])];
-
-    const defaultThrottleMs = process.env.NODE_ENV === 'test' ? 10 : 12000;
-    const throttleMs = throttleDelayMs ?? defaultThrottleMs;
-    let newlyAnalyzedInThisRun = 0;
-
-    for (let i = 0; i < batches.length; i++) {
-      if (analyzedIndices.has(i)) {
-        // Skip already analyzed batch on resume!
-        continue;
-      }
-
-      if (signal?.aborted) {
-        const rec = await notifyStage('CANCELLED', {
-          progressPercent: Math.min(85, Math.floor(60 + (i / batches.length) * 25)),
-          message: 'Concept extraction paused.',
-          currentBatch: i,
-          totalBatches: batches.length,
-          analyzedBatchIndices: Array.from(analyzedIndices),
-          accumulatedConcepts: accumulated as unknown as Array<Record<string, unknown>>,
+        procRecord = await notifyStage('SAVED', {
+          progressPercent: 60,
+          message: `Saved ${chunks.length} study chunks to local library.`,
+          counts: {
+            totalChunks: chunks.length,
+            extractedConcepts: 0,
+            totalUnits: 0,
+          },
         });
+      }
+
+      if (internalController.signal.aborted) {
+        const rec = await notifyStage('CANCELLED', { message: 'Cancelled after saving chunks.' });
         return { success: false, materialId, record: rec };
       }
 
-      const batchNum = i + 1;
-      const progressPercent = Math.min(85, Math.floor(60 + (i / batches.length) * 25));
+      // --- STAGE 6: ANALYZING (Checkpoint & Resume with Rate-Limit Throttling) ---
+      currentRunningStage = 'ANALYZING';
+      const batches = partitionChunksIntoBatches(chunks);
+      const analyzedIndices = new Set<number>(procRecord?.analyzedBatchIndices ?? []);
+      const accumulated = [...((procRecord?.accumulatedConcepts as unknown as ExtractedConceptDto[]) ?? [])];
 
-      // Throttling: if we've already dispatched a batch in this session, pause before the next batch to respect Gemini 5 RPM limit
-      if (newlyAnalyzedInThisRun > 0 && throttleMs > 0) {
-        const totalWaitSec = Math.ceil(throttleMs / 1000);
-        for (let sec = totalWaitSec; sec > 0; sec--) {
-          if (signal?.aborted) {
-            const rec = await notifyStage('CANCELLED', { message: 'Cancelled during rate limit pacing.' });
-            return { success: false, materialId, record: rec };
-          }
-          await notifyStage('ANALYZING', {
-            progressPercent,
-            message: `Pacing requests to respect Gemini API limits (waiting ${sec}s before batch ${batchNum} of ${batches.length})...`,
-            currentBatch: batchNum,
+      const defaultThrottleMs = process.env.NODE_ENV === 'test' ? 10 : 12000;
+      const throttleMs = throttleDelayMs ?? defaultThrottleMs;
+      let newlyAnalyzedInThisRun = 0;
+
+      for (let i = 0; i < batches.length; i++) {
+        if (analyzedIndices.has(i)) {
+          // Skip already analyzed batch on resume!
+          continue;
+        }
+
+        if (internalController.signal.aborted) {
+          const rec = await notifyStage('CANCELLED', {
+            progressPercent: Math.min(85, Math.floor(60 + (i / batches.length) * 25)),
+            message: 'Concept extraction paused.',
+            currentBatch: i,
             totalBatches: batches.length,
             analyzedBatchIndices: Array.from(analyzedIndices),
             accumulatedConcepts: accumulated as unknown as Array<Record<string, unknown>>,
           });
-          const sleepStep = Math.min(1000, throttleMs);
-          await new Promise((resolve) => setTimeout(resolve, sleepStep));
+          return { success: false, materialId, record: rec };
         }
-      }
 
-      await notifyStage('ANALYZING', {
-        progressPercent,
-        message: `Extracting concepts from batch ${batchNum} of ${batches.length}...`,
-        currentBatch: batchNum,
-        totalBatches: batches.length,
-        analyzedBatchIndices: Array.from(analyzedIndices),
-        accumulatedConcepts: accumulated as unknown as Array<Record<string, unknown>>,
-      });
+        const batchNum = i + 1;
+        const progressPercent = Math.min(85, Math.floor(60 + (i / batches.length) * 25));
 
-      // Call Gemini extraction route
-      const response = await fetchExtractConcepts(
-        {
-          chunks: batches[i],
-        },
-        { signal },
-      );
+        // Throttling: if we've already dispatched a batch in this session, pause before the next batch to respect Gemini limits
+        if (newlyAnalyzedInThisRun > 0 && throttleMs > 0) {
+          const totalWaitSec = Math.ceil(throttleMs / 1000);
+          for (let sec = totalWaitSec; sec > 0; sec--) {
+            if (internalController.signal.aborted) {
+              const rec = await notifyStage('CANCELLED', { message: 'Cancelled during rate limit pacing.' });
+              return { success: false, materialId, record: rec };
+            }
+            await notifyStage('ANALYZING', {
+              progressPercent,
+              message: `Pacing requests to respect Gemini API limits (waiting ${sec}s before batch ${batchNum} of ${batches.length})...`,
+              currentBatch: batchNum,
+              totalBatches: batches.length,
+              analyzedBatchIndices: Array.from(analyzedIndices),
+              accumulatedConcepts: accumulated as unknown as Array<Record<string, unknown>>,
+            });
+            const sleepStep = Math.min(1000, throttleMs);
+            await new Promise((resolve) => setTimeout(resolve, sleepStep));
+          }
+        }
 
-      accumulated.push(...response.concepts);
-      analyzedIndices.add(i);
-      newlyAnalyzedInThisRun++;
-
-      // Checkpoint progress after each batch commits
-      await updateProcessingStage(
-        materialId,
-        'ANALYZING',
-        {
+        await notifyStage('ANALYZING', {
           progressPercent,
-          message: `Completed batch ${batchNum} of ${batches.length}.`,
+          message: `Extracting concepts from batch ${batchNum} of ${batches.length}...`,
           currentBatch: batchNum,
           totalBatches: batches.length,
           analyzedBatchIndices: Array.from(analyzedIndices),
           accumulatedConcepts: accumulated as unknown as Array<Record<string, unknown>>,
-        },
-        repos,
+        });
+
+        // Call Gemini extraction route
+        const response = await fetchExtractConcepts(
+          { chunks: batches[i] },
+          { signal: internalController.signal },
+        );
+
+        accumulated.push(...response.concepts);
+        analyzedIndices.add(i);
+        newlyAnalyzedInThisRun++;
+
+        // Checkpoint progress after each batch commits
+        await updateProcessingStage(
+          materialId,
+          'ANALYZING',
+          {
+            runId,
+            progressPercent,
+            message: `Completed batch ${batchNum} of ${batches.length}.`,
+            currentBatch: batchNum,
+            totalBatches: batches.length,
+            analyzedBatchIndices: Array.from(analyzedIndices),
+            accumulatedConcepts: accumulated as unknown as Array<Record<string, unknown>>,
+          },
+          repos,
+        );
+      }
+
+      // --- STAGE 7: UNITS_BUILT ---
+      currentRunningStage = 'UNITS_BUILT';
+      await notifyStage('UNITS_BUILT', {
+        progressPercent: 90,
+        message: 'Synthesizing concepts and constructing learning units...',
+      });
+
+      const deduplicated = deduplicateConcepts(accumulated);
+      const validChunkIds = new Set(chunks.map((c) => c.id));
+      const now = nowISO();
+
+      // Raw concepts extracted in this run
+      const rawExtractedConcepts: ConceptRecord[] = deduplicated.map((dto, idx) => ({
+        id: generateId(),
+        materialId,
+        subjectId,
+        title: dto.title,
+        summary: dto.summary,
+        canonicalExplanation: dto.canonicalExplanation,
+        keyTerms: dto.keyTerms,
+        sourceChunkIds: dto.sourceChunkIds.filter((cid) => validChunkIds.has(cid)),
+        tier: 0,
+        status: 'available' as const,
+        confidence: dto.confidence,
+        extractionOrder: idx,
+        contentVersion: contentHash,
+        promptVersion: '1.0',
+        createdAt: now,
+        updatedAt: now,
+      }));
+
+      // Check if material already has existing concepts in storage (from prior run)
+      const oldExistingConcepts = await repos.concepts.listByMaterial(materialId);
+      let conceptsToPersist: ConceptRecord[];
+
+      if (oldExistingConcepts.length > 0) {
+        // Conservative matching: match old concepts to new ones, retaining existing concept IDs
+        // so that attempts, mastery scores, and SM-2 flashcard data are never lost
+        const replacePlan = planReplaceMaterialConcepts(
+          oldExistingConcepts,
+          rawExtractedConcepts,
+          contentHash,
+        );
+        conceptsToPersist = replacePlan.conceptsToPut;
+      } else {
+        conceptsToPersist = rawExtractedConcepts;
+      }
+
+      // Build raw dependencies for active (non-archived) concepts
+      const activeConcepts = conceptsToPersist.filter((c) => !c.archived);
+      const titleToConceptMap = new Map(
+        activeConcepts.map((c) => [normalizeConceptTitle(c.title), c]),
       );
-    }
+      const dependencies = [];
+      for (let i = 0; i < deduplicated.length; i++) {
+        const dto = deduplicated[i];
+        const dependent = activeConcepts.find(
+          (c) => normalizeConceptTitle(c.title) === normalizeConceptTitle(dto.title),
+        );
+        if (!dependent) continue;
 
-    // --- STAGE 7: UNITS_BUILT ---
-    currentRunningStage = 'UNITS_BUILT';
-    await notifyStage('UNITS_BUILT', {
-      progressPercent: 90,
-      message: 'Synthesizing concepts and constructing learning units...',
-    });
-
-    const deduplicated = deduplicateConcepts(accumulated);
-    const validChunkIds = new Set(chunks.map((c) => c.id));
-    const now = nowISO();
-
-    const concepts = deduplicated.map((dto, idx) => ({
-      id: generateId(),
-      materialId,
-      subjectId,
-      title: dto.title,
-      summary: dto.summary,
-      canonicalExplanation: dto.canonicalExplanation,
-      keyTerms: dto.keyTerms,
-      sourceChunkIds: dto.sourceChunkIds.filter((cid) => validChunkIds.has(cid)),
-      tier: 0,
-      status: 'available' as const,
-      confidence: dto.confidence,
-      extractionOrder: idx,
-      contentVersion: contentHash,
-      promptVersion: '1.0',
-      createdAt: now,
-      updatedAt: now,
-    }));
-
-    // Build raw dependencies
-    const titleToConceptMap = new Map(
-      concepts.map((c) => [normalizeConceptTitle(c.title), c]),
-    );
-    const dependencies = [];
-    for (let i = 0; i < deduplicated.length; i++) {
-      const dto = deduplicated[i];
-      const dependent = concepts[i];
-      for (const pTitle of dto.prerequisiteTitles) {
-        const prereq = titleToConceptMap.get(normalizeConceptTitle(pTitle));
-        if (prereq && prereq.id !== dependent.id) {
-          dependencies.push({
-            id: generateId(),
-            prerequisiteId: prereq.id,
-            dependentConceptId: dependent.id,
-            confidence: Math.min(dependent.confidence, prereq.confidence),
-            removed: false,
-            createdAt: now,
-          });
+        for (const pTitle of dto.prerequisiteTitles) {
+          const prereq = titleToConceptMap.get(normalizeConceptTitle(pTitle));
+          if (prereq && prereq.id !== dependent.id) {
+            dependencies.push({
+              id: generateId(),
+              prerequisiteId: prereq.id,
+              dependentConceptId: dependent.id,
+              confidence: Math.min(dependent.confidence, prereq.confidence),
+              removed: false,
+              createdAt: now,
+            });
+          }
         }
       }
-    }
 
-    // Build DAG and ordered concepts
-    const graphResult = buildDependencyGraph({ concepts, dependencies, chunks });
-    const orderedConcepts = graphResult.orderedConcepts;
-    const finalDependencies = graphResult.allEdges.map((e) => ({
-      ...e,
-      createdAt: e.createdAt ?? now,
-    }));
+      // Build DAG and ordered concepts
+      const graphResult = buildDependencyGraph({ concepts: activeConcepts, dependencies, chunks });
+      const orderedConcepts = graphResult.orderedConcepts;
+      const finalDependencies = graphResult.allEdges.map((e) => ({
+        ...e,
+        createdAt: e.createdAt ?? now,
+      }));
 
-    // Build deterministic learning units (3-8 concepts, every concept in 1 unit)
-    const unitResult = buildLearningUnits({
-      materialId,
-      contentVersion: contentHash,
-      concepts: orderedConcepts,
-      dependencies: finalDependencies,
-      chunks,
-      headings: extractedHeadings ?? (existingDoc?.metadata?.headings as ExtractedHeading[] | undefined),
-      docTitle: file.name,
-    });
+      // Build deterministic learning units (3-8 concepts, every concept in 1 unit)
+      const unitResult = buildLearningUnits({
+        materialId,
+        contentVersion: contentHash,
+        concepts: orderedConcepts,
+        dependencies: finalDependencies,
+        chunks,
+        headings: extractedHeadings ?? (existingDoc?.metadata?.headings as ExtractedHeading[] | undefined),
+        docTitle: file.name,
+      });
 
-    // Update concepts with unitIds
-    for (const c of orderedConcepts) {
-      c.unitId = unitResult.conceptUnitMap.get(c.id);
-    }
+      // Update active concepts with unitIds
+      for (const c of orderedConcepts) {
+        c.unitId = unitResult.conceptUnitMap.get(c.id);
+      }
 
-    // Persist concepts, dependencies, and learning units atomically
-    await Promise.all([
-      repos.concepts.putMany(orderedConcepts),
-      repos.dependencies.putMany(finalDependencies),
-      repos.learningUnits.putMany(unitResult.units),
-    ]);
+      // Clean up previous learning units for this material to prevent duplicate records
+      const oldUnits = await repos.learningUnits.listByMaterial(materialId);
+      for (const u of oldUnits) {
+        await repos.learningUnits.delete(u.id);
+      }
 
-    // Update document analysisStatus = 'completed'
-    const finalDoc = await repos.documents.get(materialId);
-    if (finalDoc) {
-      finalDoc.analysisStatus = 'completed';
-      finalDoc.updatedAt = now;
-      await repos.documents.put(finalDoc);
-    }
+      // Persist concepts, dependencies, and learning units atomically
+      await Promise.all([
+        repos.concepts.putMany(conceptsToPersist),
+        repos.dependencies.putMany(finalDependencies),
+        repos.learningUnits.putMany(unitResult.units),
+      ]);
 
-    // --- STAGE 8: COMPLETE ---
-    procRecord = await notifyStage('COMPLETE', {
-      progressPercent: 100,
-      message: `Completed processing: ${unitResult.units.length} learning units and ${orderedConcepts.length} concepts ready.`,
-      counts: {
-        totalChunks: chunks.length,
-        extractedConcepts: orderedConcepts.length,
-        totalUnits: unitResult.units.length,
-      },
-    });
+      // Update document analysisStatus = 'completed'
+      const finalDoc = await repos.documents.get(materialId);
+      if (finalDoc) {
+        finalDoc.analysisStatus = 'completed';
+        finalDoc.updatedAt = now;
+        await repos.documents.put(finalDoc);
+      }
 
-    return {
-      success: true,
-      materialId,
-      record: procRecord,
-    };
-  } catch (err) {
-    const errorMsg = err instanceof Error ? err.message : String(err);
-    // Sanitize error message to ensure no note content is leaked
-    let safeError = errorMsg.replace(/["'].*?["']/g, '"[content]"');
-    if (errorMsg.includes('rate limit') || errorMsg.includes('429') || errorMsg.includes('RESOURCE_EXHAUSTED')) {
-      if (!safeError.includes('[content]')) {
-        safeError = `${safeError} (Gemini Free Tier limit is 5 RPM. Click Resume to continue.)`;
+      // --- STAGE 8: COMPLETE ---
+      procRecord = await notifyStage('COMPLETE', {
+        progressPercent: 100,
+        message: `Completed processing: ${unitResult.units.length} learning units and ${orderedConcepts.length} concepts ready.`,
+        counts: {
+          totalChunks: chunks.length,
+          extractedConcepts: orderedConcepts.length,
+          totalUnits: unitResult.units.length,
+        },
+      });
+
+      return {
+        success: true,
+        materialId,
+        record: procRecord,
+      };
+    } catch (err) {
+      if (
+        internalController.signal.aborted ||
+        (err instanceof Error && (err.name === 'AbortError' || /abort|cancel/i.test(err.message)))
+      ) {
+        try {
+          const cancelledRecord = await notifyStage('CANCELLED', {
+            message: 'Processing cancelled by user. Progress has been saved.',
+          });
+          return {
+            success: false,
+            materialId,
+            record: cancelledRecord,
+          };
+        } catch {
+          const fallbackCancelled: MaterialProcessingRecord = {
+            id: materialId,
+            materialId,
+            runId,
+            stage: 'CANCELLED',
+            progressPercent: procRecord?.progressPercent ?? 0,
+            message: 'Processing cancelled by user. Progress has been saved.',
+            createdAt: nowISO(),
+            updatedAt: nowISO(),
+          };
+          return {
+            success: false,
+            materialId,
+            record: fallbackCancelled,
+          };
+        }
+      }
+
+      const errorMsg = err instanceof Error ? err.message : String(err);
+      // Sanitize error message to ensure no note content is leaked
+      let safeError = errorMsg.replace(/["'].*?["']/g, '"[content]"');
+      if (errorMsg.includes('rate limit') || errorMsg.includes('429') || errorMsg.includes('RESOURCE_EXHAUSTED')) {
+        if (!safeError.includes('[content]')) {
+          safeError = `${safeError} (Gemini Free Tier limit is 5 RPM. Click Resume to continue.)`;
+        }
+      }
+
+      try {
+        const failedRecord = await notifyStage('FAILED', {
+          failedStage: currentRunningStage,
+          errorCode: 'ANALYSIS_ERROR',
+          errorMessage: safeError,
+          retryable: true,
+        });
+        return {
+          success: false,
+          materialId,
+          record: failedRecord,
+          error: safeError,
+        };
+      } catch (notifyErr) {
+        console.error('Failed to persist FAILED stage:', notifyErr);
+        const fallbackRecord: MaterialProcessingRecord = {
+          id: materialId,
+          materialId,
+          runId,
+          stage: 'FAILED',
+          progressPercent: 0,
+          message: safeError,
+          failedStage: currentRunningStage,
+          errorCode: 'ANALYSIS_ERROR',
+          errorMessage: safeError,
+          retryable: true,
+          createdAt: nowISO(),
+          updatedAt: nowISO(),
+        };
+        return {
+          success: false,
+          materialId,
+          record: fallbackRecord,
+          error: safeError,
+        };
       }
     }
+  })();
 
-    const failedRecord = await notifyStage('FAILED', {
-      failedStage: currentRunningStage,
-      errorCode: 'ANALYSIS_ERROR',
-      errorMessage: safeError,
-      retryable: true,
-    });
-
-    return {
-      success: false,
-      materialId,
-      record: failedRecord,
-      error: safeError,
-    };
-  }
+  processingJobManager.registerJob(materialId, runId, internalController, runPromise);
+  return runPromise;
 }
 
 /**
@@ -495,12 +624,27 @@ export async function processMaterialLifecycle(
 export async function resumeMaterialAnalysis(
   materialId: string,
   options: {
+    runId?: string;
     signal?: AbortSignal;
     onProgress?: (record: MaterialProcessingRecord) => void;
     customRepos?: StorageRepositories;
     throttleDelayMs?: number;
   } = {},
 ): Promise<{ success: boolean; materialId: string; record: MaterialProcessingRecord; error?: string }> {
+  // If there is already an active running job for this material, join it
+  const existingJob = processingJobManager.getJob<{
+    success: boolean;
+    materialId: string;
+    record: MaterialProcessingRecord;
+    error?: string;
+  }>(materialId);
+  if (existingJob) {
+    if (options.onProgress) {
+      existingJob.listeners.add(options.onProgress);
+    }
+    return existingJob.promise;
+  }
+
   const repos = options.customRepos ?? getStorage();
   const doc = await repos.documents.get(materialId);
   if (!doc) {
@@ -510,6 +654,7 @@ export async function resumeMaterialAnalysis(
       record: {
         id: materialId,
         materialId,
+        runId: options.runId ?? generateId(),
         stage: 'FAILED',
         progressPercent: 0,
         message: 'Material record not found in storage.',
@@ -521,6 +666,8 @@ export async function resumeMaterialAnalysis(
       error: 'Material record not found in storage.',
     };
   }
+
+  const runId = options.runId ?? generateId();
 
   // If study chunks are already saved in IndexedDB, resume directly into Stage 6 (ANALYZING)
   // without re-opening or re-parsing the original raw PDF file
@@ -537,6 +684,7 @@ export async function resumeMaterialAnalysis(
           textBytes.buffer.slice(textBytes.byteOffset, textBytes.byteOffset + textBytes.byteLength),
       },
       materialId,
+      runId,
       subjectId: doc.subjectId,
       signal: options.signal,
       onProgress: options.onProgress,
@@ -557,6 +705,7 @@ export async function resumeMaterialAnalysis(
         arrayBuffer: () => blob.arrayBuffer(),
       },
       materialId,
+      runId,
       subjectId: doc.subjectId,
       signal: options.signal,
       onProgress: options.onProgress,
@@ -577,6 +726,7 @@ export async function resumeMaterialAnalysis(
         textBytes.buffer.slice(textBytes.byteOffset, textBytes.byteOffset + textBytes.byteLength),
     },
     materialId,
+    runId,
     subjectId: doc.subjectId,
     signal: options.signal,
     onProgress: options.onProgress,

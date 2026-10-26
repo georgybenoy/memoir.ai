@@ -1,7 +1,7 @@
 'use client';
 
 import * as React from 'react';
-import { Sparkles, Brain, Loader2 } from 'lucide-react';
+import { Sparkles, Brain } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
 import { QuestionCard } from '@/components/tutor/QuestionCard';

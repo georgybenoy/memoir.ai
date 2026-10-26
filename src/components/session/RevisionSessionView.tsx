@@ -1,7 +1,7 @@
 'use client';
 
 import * as React from 'react';
-import { Calendar, Brain, BookOpen, Clock, CheckCircle2, ArrowRight, Loader2 } from 'lucide-react';
+import { Calendar, Brain, BookOpen, Clock, CheckCircle2, ArrowRight } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
 import { QuestionCard } from '@/components/tutor/QuestionCard';

@@ -159,6 +159,7 @@ export const MaterialProcessingSchema = z
   .object({
     id: z.string().min(1),
     materialId: z.string().min(1),
+    runId: z.string().optional(),
     stage: ProcessingStageSchema,
     currentStage: ProcessingStageSchema.optional(),
     progressPercent: z.number().min(0).max(100),

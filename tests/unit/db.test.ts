@@ -1,39 +1,42 @@
 import 'fake-indexeddb/auto';
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { type StoreNames } from 'idb';
 import {
-  getDatabase,
+  openDatabase,
   closeDatabase,
-  safeWrite,
-  StorageQuotaExceededError,
+  removeDatabase,
+} from '@/lib/db/indexeddb';
+import {
   isQuotaExceededError,
-  type EduMentorDB,
-} from '@/lib/storage/db';
+  normalizeStorageError,
+  StorageError,
+} from '@/lib/db/errors';
 
-describe('IndexedDB Storage Wrapper', () => {
+describe('IndexedDB Storage Engine & Quota Detection', () => {
   let testDbName: string;
 
-  beforeEach(() => {
+  beforeEach(async () => {
     closeDatabase();
     testDbName = `edumentor-test-${Math.random().toString(36).slice(2)}`;
   });
 
-  afterEach(() => {
+  afterEach(async () => {
     closeDatabase();
+    await removeDatabase(testDbName);
   });
 
-  it('opens database and executes version 1 migrations creating all stores', async () => {
-    const db = await getDatabase(testDbName, 1);
+  it('opens database with current schema and verifies core stores', async () => {
+    const db = await openDatabase(testDbName);
     expect(db).toBeDefined();
 
-    const expectedStores: StoreNames<EduMentorDB>[] = [
-      'notes',
-      'chunks',
-      'embeddings',
-      'evaluations',
-      'review_items',
-      'sessions',
-      'settings',
+    const expectedStores = [
+      'documents',
+      'documentChunks',
+      'concepts',
+      'conceptDependencies',
+      'learningUnits',
+      'studySessions',
+      'conversationMessages',
+      'processing',
     ];
 
     for (const store of expectedStores) {
@@ -41,35 +44,42 @@ describe('IndexedDB Storage Wrapper', () => {
     }
   });
 
-  it('performs basic CRUD operations on notes store', async () => {
-    const db = await getDatabase(testDbName, 1);
+  it('performs basic CRUD operations on documents store', async () => {
+    const db = await openDatabase(testDbName);
 
-    const testNote = {
-      id: 'note-1',
-      title: 'Operating Systems - Concurrency',
-      content: 'Threads, mutexes, condition variables and deadlocks.',
+    const testDoc = {
+      id: 'doc-1',
+      materialId: 'doc-1',
+      filename: 'OS_Concurrency.txt',
+      fileType: 'txt' as const,
+      fileSize: 1024,
+      extractedText: 'Threads and synchronization.',
+      analysisStatus: 'pending' as const,
+      fileHash: 'hash1',
+      contentHash: 'hash1',
+      contentVersion: 'hash1',
+      promptVersion: '1.0',
       createdAt: '2026-05-01T10:00:00Z',
       updatedAt: '2026-05-01T10:00:00Z',
-      subjectId: 'cs-301',
     };
 
     // Create
-    await db.put('notes', testNote);
+    await db.put('documents', testDoc);
 
     // Read
-    const retrieved = await db.get('notes', 'note-1');
+    const retrieved = await db.get('documents', 'doc-1');
     expect(retrieved).toBeDefined();
-    expect(retrieved?.title).toBe('Operating Systems - Concurrency');
+    expect(retrieved?.filename).toBe('OS_Concurrency.txt');
 
     // Update
-    testNote.title = 'Operating Systems - Concurrency & Synchronization';
-    await db.put('notes', testNote);
-    const updated = await db.get('notes', 'note-1');
-    expect(updated?.title).toBe('Operating Systems - Concurrency & Synchronization');
+    testDoc.filename = 'OS_Concurrency_V2.txt';
+    await db.put('documents', testDoc);
+    const updated = await db.get('documents', 'doc-1');
+    expect(updated?.filename).toBe('OS_Concurrency_V2.txt');
 
     // Delete
-    await db.delete('notes', 'note-1');
-    const deleted = await db.get('notes', 'note-1');
+    await db.delete('documents', 'doc-1');
+    const deleted = await db.get('documents', 'doc-1');
     expect(deleted).toBeUndefined();
   });
 
@@ -84,12 +94,11 @@ describe('IndexedDB Storage Wrapper', () => {
     expect(isQuotaExceededError(regularError)).toBe(false);
   });
 
-  it('safeWrite intercepts quota errors and throws StorageQuotaExceededError', async () => {
-    const failingOp = async () => {
-      const quotaErr = new DOMException('Quota limit reached', 'QuotaExceededError');
-      throw quotaErr;
-    };
+  it('normalizeStorageError maps quota error to StorageError with QUOTA_EXCEEDED code', () => {
+    const quotaErr = new DOMException('Quota limit reached', 'QuotaExceededError');
+    const normalized = normalizeStorageError(quotaErr);
 
-    await expect(safeWrite(failingOp)).rejects.toThrow(StorageQuotaExceededError);
+    expect(normalized).toBeInstanceOf(StorageError);
+    expect(normalized.code).toBe('QUOTA_EXCEEDED');
   });
 });

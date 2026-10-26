@@ -7,3 +7,4 @@ export * from './provenance';
 export * from './ingest';
 export * from './processing-service';
 export * from './duplicates';
+export * from './job-manager';

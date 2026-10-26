@@ -58,6 +58,7 @@ Running list of tasks that only a human can perform. Agents append items here an
   2. Verify that the AI tutor delivers real-time Socratic dialogue with varied avatar expressions.
   3. Use the "Explain differently" dropdown to test `Analogy`, `Example`, and `Simplify` with the live model.
   4. In Recall mode, generate a practice question, submit an answer, and verify that live rubric scores and semantic evaluation are returned.
+- [ ] **Pipeline Orchestration & Batch Pacing Verification on Production** — On production deployment, upload a multi-page document requiring multiple concept extraction batches, observe real-time batch progression ("Batch 1 of 2"), verify that rate-limit pacing countdowns display when Gemini Free Tier RPM limits are approached, and test in-flight cancellation via the "Cancel Analysis" button.
   5. Verify that network disconnect cleanly triggers the "Tutor explanation unavailable" banner and offers stored canonical fallback.
 - [ ] **Pomodoro Timer Audio Chime & Browser Notification Verification on Physical Devices**:
   1. Open a Study session in Step 4 on a physical desktop browser (Chrome/Edge, Safari, Firefox) and mobile phone (iOS Safari, Android Chrome).

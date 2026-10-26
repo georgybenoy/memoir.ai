@@ -6,16 +6,13 @@ import {
   FileText,
   Trash2,
   AlertCircle,
-  CheckCircle2,
   Sparkles,
   BookOpen,
   Info,
   X,
-  ShieldAlert,
   Loader2,
-  Network,
-  Tag,
-  Quote,
+  RotateCw,
+  RefreshCw,
 } from 'lucide-react';
 import {
   Card,
@@ -25,516 +22,66 @@ import {
   CardContent,
 } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
-import {
-  Dialog,
-  DialogContent,
-  DialogFooter,
-} from '@/components/ui/dialog';
 import { EmptyState } from '@/components/ui/empty-state';
 import { useWorkspaceStore } from '@/lib/state/workspace-store';
-import {
-  MAX_UPLOAD_BYTES,
-  formatBytes,
-} from '@/lib/config/ingestion';
-import {
-  ingestDocument,
-  verifyChunkProvenance,
-  getChunkExcerpt,
-  type IngestionProgress,
-  type IngestResult,
-} from '@/features/ingestion';
-import {
-  evaluateDuplicateDecision,
-  inFlightDeduplicator,
-  computeFileHash,
-  type DuplicateDecision,
-} from '@/features/ingestion/duplicates';
-import {
-  extractConceptsForDocument,
-  type ConceptPipelineProgress,
-} from '@/features/concepts';
-import { buildLearningUnits } from '@/features/learning-units/builder';
-import { persistLearningUnits } from '@/features/learning-units/service';
-import {
-  getDeleteMaterialCascadeSummary,
-  executeDeleteMaterialCascade,
-  planReplaceMaterialConcepts,
-  type DeleteMaterialCascadeSummary,
-} from '@/features/learning-units/reprocess-replace';
-import { getStorage } from '@/lib/db/bootstrap';
-import { nowISO } from '@/lib/utils/clock';
-import {
-  type DocumentRecord,
-  type DocumentChunkRecord,
-  type ConceptRecord,
-  type LearningUnitRecord,
-  type MaterialProcessingRecord,
-} from '@/types/domain';
+import { MAX_UPLOAD_BYTES, formatBytes } from '@/lib/config/ingestion';
 import { cn } from '@/lib/utils/cn';
-import { Layers, RotateCw, RefreshCw } from 'lucide-react';
+
+import { useMaterialsManager } from './use-materials-manager';
+import { MaterialDetailTabs } from './material-detail-tabs';
+import { MaterialDeleteModal } from './material-delete-modal';
+import { MaterialExcerptModal } from './material-excerpt-modal';
+import { DuplicateNoticeModal } from '@/components/workflow/duplicate-modal';
 
 export function MaterialsView() {
-  const { setActiveView, addToast } = useWorkspaceStore();
+  const { setActiveView } = useWorkspaceStore();
 
-  // Documents list and preview state
-  const [documents, setDocuments] = React.useState<DocumentRecord[]>([]);
-  const [loadingDocs, setLoadingDocs] = React.useState(true);
-  const [selectedDoc, setSelectedDoc] = React.useState<DocumentRecord | null>(null);
-  const [selectedDocChunks, setSelectedDocChunks] = React.useState<DocumentChunkRecord[]>([]);
-  const [selectedDocUnits, setSelectedDocUnits] = React.useState<LearningUnitRecord[]>([]);
-  const [loadingChunks, setLoadingChunks] = React.useState(false);
-  const [previewTab, setPreviewTab] = React.useState<'text' | 'chunks' | 'concepts' | 'units'>('text');
-
-  // Processing records per material
-  const [processingRecords, setProcessingRecords] = React.useState<Record<string, MaterialProcessingRecord>>({});
-
-  // Duplicate notice modal state
-  const [duplicateModal, setDuplicateModal] = React.useState<{
-    decision: DuplicateDecision;
-    file: File;
-  } | null>(null);
-
-  // Concept extraction & analysis state
-  const [extractedConcepts, setExtractedConcepts] = React.useState<ConceptRecord[]>([]);
-  const [isAnalyzing, setIsAnalyzing] = React.useState(false);
-  const [analysisProgress, setAnalysisProgress] = React.useState<ConceptPipelineProgress | null>(null);
-  const [analysisError, setAnalysisError] = React.useState<string | null>(null);
-  const [inspectedExcerpt, setInspectedExcerpt] = React.useState<{
-    conceptTitle: string;
-    chunkIndex: number;
-    chunkId: string;
-    excerpt: ReturnType<typeof getChunkExcerpt>;
-  } | null>(null);
-
-  // Drag & drop and upload state
-  const [isDragging, setIsDragging] = React.useState(false);
-  const [isProcessing, setIsProcessing] = React.useState(false);
-  const [progress, setProgress] = React.useState<IngestionProgress | null>(null);
-  const [lastAttemptedFile, setLastAttemptedFile] = React.useState<{ name: string; size: number } | null>(null);
-  const [uploadError, setUploadError] = React.useState<{ code?: string; message: string } | null>(null);
-
-  // Deletion modal state
-  const [docToDelete, setDocToDelete] = React.useState<DocumentRecord | null>(null);
-  const [deleteCascadeSummary, setDeleteCascadeSummary] = React.useState<DeleteMaterialCascadeSummary | null>(null);
-  const [isDeleting, setIsDeleting] = React.useState(false);
-
-  // Refs for cancellation and inputs
   const fileInputRef = React.useRef<HTMLInputElement | null>(null);
   const replaceFileInputRef = React.useRef<HTMLInputElement | null>(null);
-  const abortControllerRef = React.useRef<AbortController | null>(null);
-  const analysisAbortRef = React.useRef<AbortController | null>(null);
 
-  const handleOpenDelete = React.useCallback((doc: DocumentRecord) => {
-    setDocToDelete(doc);
-    const storage = getStorage();
-    void getDeleteMaterialCascadeSummary(doc.id, storage).then(setDeleteCascadeSummary);
-  }, []);
-
-  const handleCloseDelete = React.useCallback(() => {
-    setDocToDelete(null);
-    setDeleteCascadeSummary(null);
-  }, []);
-
-  // Load existing documents from storage
-  // Load existing documents and processing records from storage
-  const loadDocuments = React.useCallback(async () => {
-    try {
-      const storage = getStorage();
-      const [docs, procs] = await Promise.all([
-        storage.documents.list(),
-        storage.processing.list(),
-      ]);
-      docs.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
-      setDocuments(docs);
-
-      const procMap: Record<string, MaterialProcessingRecord> = {};
-      for (const p of procs) {
-        procMap[p.materialId] = p;
-      }
-      setProcessingRecords(procMap);
-      return docs;
-    } catch (err) {
-      console.error('Failed to load documents:', err);
-      return [];
-    } finally {
-      setLoadingDocs(false);
-    }
-  }, []);
-
-  React.useEffect(() => {
-    let mounted = true;
-    const storage = getStorage();
-    Promise.all([storage.documents.list(), storage.processing.list()])
-      .then(([docs, procs]) => {
-        if (mounted) {
-          docs.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
-          setDocuments(docs);
-          const procMap: Record<string, MaterialProcessingRecord> = {};
-          for (const p of procs) {
-            procMap[p.materialId] = p;
-          }
-          setProcessingRecords(procMap);
-          setLoadingDocs(false);
-        }
-      })
-      .catch((err) => {
-        console.error('Failed to load documents:', err);
-        if (mounted) setLoadingDocs(false);
-      });
-
-    return () => {
-      mounted = false;
-    };
-  }, []);
-
-  // Load chunks, units, and concepts when a document is selected
-  const handleSelectDoc = React.useCallback(async (doc: DocumentRecord) => {
-    setSelectedDoc(doc);
-    setLoadingChunks(true);
-    setAnalysisError(null);
-    try {
-      const storage = getStorage();
-      const [chunks, units, concepts, proc] = await Promise.all([
-        storage.chunks.listByDocument(doc.id),
-        storage.learningUnits.listByMaterial(doc.id),
-        storage.concepts.listByMaterial(doc.id),
-        storage.processing.getByMaterial(doc.id),
-      ]);
-
-      chunks.sort((a, b) => a.chunkIndex - b.chunkIndex);
-      setSelectedDocChunks(chunks);
-      setSelectedDocUnits(units);
-
-      const docChunkIds = new Set(chunks.map((c) => c.id));
-      const related = concepts.length > 0
-        ? concepts
-        : (await storage.concepts.list()).filter((c) => c.sourceChunkIds.some((id) => docChunkIds.has(id)));
-      related.sort((a, b) => a.extractionOrder - b.extractionOrder);
-      setExtractedConcepts(related);
-
-      if (proc) {
-        setProcessingRecords((prev) => ({ ...prev, [doc.id]: proc }));
-      }
-
-      if (units.length > 0) {
-        setPreviewTab('units');
-      } else if (related.length > 0) {
-        setPreviewTab('concepts');
-      } else {
-        setPreviewTab('text');
-      }
-    } catch (err) {
-      console.error('Failed to load chunks or concepts for document:', err);
-      setSelectedDocChunks([]);
-      setExtractedConcepts([]);
-      setSelectedDocUnits([]);
-    } finally {
-      setLoadingChunks(false);
-    }
-  }, []);
-
-  // Process file upload with in-flight deduplication and duplicate detection
-  const processFile = async (
-    file: File,
-    options: { allowDuplicate?: boolean; replaceMaterialId?: string } = {},
-  ) => {
-    // 1. In-flight double-drop / rapid picker deduplication
-    const sig = inFlightDeduplicator.getSignature(file.name, file.size, file.lastModified);
-    if (inFlightDeduplicator.isInFlight(sig)) {
-      return;
-    }
-    const unregisterInFlight = inFlightDeduplicator.register(sig);
-
-    try {
-      // 2. Pre-flight duplicate check if not explicitly allowed or replacing
-      if (!options.allowDuplicate && !options.replaceMaterialId) {
-        const buffer = await file.arrayBuffer();
-        const fileHash = await computeFileHash(new Uint8Array(buffer));
-        const decision = evaluateDuplicateDecision(fileHash, file.name, documents);
-        if (decision.type !== 'UNIQUE') {
-          setDuplicateModal({ decision, file });
-          return;
-        }
-      }
-
-      setLastAttemptedFile({ name: file.name, size: file.size });
-      setUploadError(null);
-      setIsProcessing(true);
-      setProgress({
-        stage: 'validating',
-        percent: 5,
-        message: `Validating ${file.name}...`,
-      });
-
-      const controller = new AbortController();
-      abortControllerRef.current = controller;
-
-      const result: IngestResult = await ingestDocument({
-        file: {
-          name: file.name,
-          size: file.size,
-          type: file.type,
-          lastModified: file.lastModified,
-          arrayBuffer: () => file.arrayBuffer(),
-        },
-        allowDuplicate: options.allowDuplicate,
-        signal: controller.signal,
-        onProgress: (p) => setProgress(p),
-      });
-
-      if (!result.success) {
-        setUploadError({
-          code: result.code,
-          message: result.error || 'Failed to process document.',
-        });
-        return;
-      }
-
-      if (result.document && result.chunks) {
-        // If replacing an existing material, apply conservative concept matching
-        if (options.replaceMaterialId) {
-          const storage = getStorage();
-          const oldConcepts = await storage.concepts.listByMaterial(options.replaceMaterialId);
-          if (oldConcepts.length > 0) {
-            const replacePlan = planReplaceMaterialConcepts(
-              oldConcepts,
-              [],
-              result.document.contentHash,
-            );
-            await storage.concepts.putMany(replacePlan.conceptsToPut);
-          }
-        }
-
-        addToast({
-          type: 'success',
-          title: options.replaceMaterialId ? 'Material replaced' : 'Document imported',
-          description: `"${result.document.filename}" imported with ${result.chunks.length} study chunks.`,
-        });
-
-        const updatedDocs = await loadDocuments();
-        const freshDoc = updatedDocs.find((d) => d.id === result.documentId) || result.document;
-        await handleSelectDoc(freshDoc);
-      }
-    } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
-      setUploadError({
-        code: 'UNEXPECTED_ERROR',
-        message: `An unexpected error occurred: ${message}`,
-      });
-    } finally {
-      unregisterInFlight();
-      setIsProcessing(false);
-      abortControllerRef.current = null;
-      if (fileInputRef.current) {
-        fileInputRef.current.value = '';
-      }
-    }
-  };
-
-  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const files = e.target.files;
-    if (files && files.length > 0) {
-      void processFile(files[0]);
-    }
-  };
-
-  const handleDragOver = (e: React.DragEvent) => {
-    e.preventDefault();
-    e.stopPropagation();
-    setIsDragging(true);
-  };
-
-  const handleDragLeave = (e: React.DragEvent) => {
-    e.preventDefault();
-    e.stopPropagation();
-    setIsDragging(false);
-  };
-
-  const handleDrop = (e: React.DragEvent) => {
-    e.preventDefault();
-    e.stopPropagation();
-    setIsDragging(false);
-
-    if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
-      void processFile(e.dataTransfer.files[0]);
-    }
-  };
-
-  const handleCancelUpload = () => {
-    if (abortControllerRef.current) {
-      abortControllerRef.current.abort();
-    }
-  };
-
-  // Run AI Concept Extraction and Learning Unit synthesis on the selected document
-  const handleAnalyzeNotes = async () => {
-    if (!selectedDoc) return;
-    setIsAnalyzing(true);
-    setAnalysisError(null);
-    setAnalysisProgress({
-      stage: 'batching',
-      percent: 5,
-      message: 'Reading your material and identifying concepts…',
-    });
-
-    const storage = getStorage();
-    await storage.processing.put({
-      id: selectedDoc.id,
-      materialId: selectedDoc.id,
-      stage: 'ANALYZING',
-      progressPercent: 10,
-      message: 'Analyzing material notes...',
-      contentVersion: selectedDoc.contentHash,
-      promptVersion: '1.0',
-      createdAt: selectedDoc.createdAt,
-      updatedAt: nowISO(),
-    });
-
-    const controller = new AbortController();
-    analysisAbortRef.current = controller;
-
-    try {
-      const result = await extractConceptsForDocument({
-        documentId: selectedDoc.id,
-        signal: controller.signal,
-        onProgress: (p) => setAnalysisProgress(p),
-      });
-
-      if (!result.success) {
-        setAnalysisError(result.error || 'Failed to extract concepts from this material.');
-        await storage.processing.put({
-          id: selectedDoc.id,
-          materialId: selectedDoc.id,
-          stage: 'FAILED',
-          progressPercent: 0,
-          message: result.error || 'Concept extraction failed.',
-          failedStage: 'ANALYZING',
-          errorCode: 'ANALYSIS_ERROR',
-          errorMessage: result.error || 'Concept extraction failed.',
-          retryable: true,
-          contentVersion: selectedDoc.contentHash,
-          createdAt: selectedDoc.createdAt,
-          updatedAt: nowISO(),
-        });
-        await loadDocuments();
-        return;
-      }
-
-      setExtractedConcepts(result.concepts);
-
-      // Build deterministic learning units from extracted concepts
-      const unitResult = buildLearningUnits({
-        materialId: selectedDoc.id,
-        contentVersion: selectedDoc.contentHash,
-        concepts: result.concepts,
-        dependencies: result.dependencies,
-        chunks: selectedDocChunks,
-        docTitle: selectedDoc.filename,
-      });
-
-      await persistLearningUnits(unitResult.units, unitResult.conceptUnitMap, storage);
-      setSelectedDocUnits(unitResult.units);
-
-      // Mark processing as COMPLETE with real counts
-      await storage.processing.put({
-        id: selectedDoc.id,
-        materialId: selectedDoc.id,
-        stage: 'COMPLETE',
-        progressPercent: 100,
-        message: `Completed processing: ${unitResult.units.length} learning units and ${result.concepts.length} concepts ready.`,
-        counts: {
-          totalChunks: selectedDocChunks.length,
-          extractedConcepts: result.concepts.length,
-          totalUnits: unitResult.units.length,
-        },
-        contentVersion: selectedDoc.contentHash,
-        promptVersion: '1.0',
-        createdAt: selectedDoc.createdAt,
-        updatedAt: nowISO(),
-      });
-
-      setPreviewTab('concepts');
-      addToast({
-        type: 'success',
-        title: 'Concepts & Learning Units Ready',
-        description: `Identified ${result.concepts.length} concepts organized into ${unitResult.units.length} structured learning units.`,
-      });
-
-      await loadDocuments();
-    } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
-      setAnalysisError(message);
-      await storage.processing.put({
-        id: selectedDoc.id,
-        materialId: selectedDoc.id,
-        stage: 'FAILED',
-        progressPercent: 0,
-        message,
-        failedStage: 'ANALYZING',
-        errorCode: 'UNEXPECTED_ANALYSIS_ERROR',
-        errorMessage: message,
-        retryable: true,
-        contentVersion: selectedDoc.contentHash,
-        createdAt: selectedDoc.createdAt,
-        updatedAt: nowISO(),
-      });
-      await loadDocuments();
-    } finally {
-      setIsAnalyzing(false);
-      analysisAbortRef.current = null;
-    }
-  };
-
-  const handleCancelAnalysis = () => {
-    if (analysisAbortRef.current) {
-      analysisAbortRef.current.abort();
-    }
-  };
-
-  const handleOpenExcerpt = (concept: ConceptRecord, chunkId: string) => {
-    if (!selectedDoc) return;
-    const chunk = selectedDocChunks.find((c) => c.id === chunkId);
-    if (!chunk) return;
-    const excerpt = getChunkExcerpt(selectedDoc, chunk, 120);
-    setInspectedExcerpt({
-      conceptTitle: concept.title,
-      chunkIndex: chunk.chunkIndex + 1,
-      chunkId: chunk.id,
-      excerpt,
-    });
-  };
-
-  const confirmDelete = async () => {
-    if (!docToDelete) return;
-    setIsDeleting(true);
-    try {
-      const storage = getStorage();
-      await executeDeleteMaterialCascade(docToDelete.id, storage);
-      addToast({
-        type: 'info',
-        title: 'Material deleted',
-        description: `"${docToDelete.filename}" and all its dependent records were removed.`,
-      });
-      if (selectedDoc?.id === docToDelete.id) {
-        setSelectedDoc(null);
-        setSelectedDocChunks([]);
-        setExtractedConcepts([]);
-        setSelectedDocUnits([]);
-      }
-      await loadDocuments();
-      setDocToDelete(null);
-      setDeleteCascadeSummary(null);
-    } catch (err) {
-      console.error('Failed to delete document:', err);
-      addToast({
-        type: 'error',
-        title: 'Delete failed',
-        description: 'Unable to remove document from local storage.',
-      });
-    } finally {
-      setIsDeleting(false);
-    }
-  };
+  const {
+    documents,
+    loadingDocs,
+    selectedDoc,
+    selectedDocChunks,
+    selectedDocUnits,
+    extractedConcepts,
+    loadingChunks,
+    previewTab,
+    setPreviewTab,
+    processingRecords,
+    duplicateModal,
+    setDuplicateModal,
+    isAnalyzing,
+    analysisProgress,
+    analysisError,
+    setAnalysisError,
+    inspectedExcerpt,
+    setInspectedExcerpt,
+    isDragging,
+    isProcessing,
+    progress,
+    lastAttemptedFile,
+    uploadError,
+    setUploadError,
+    docToDelete,
+    deleteCascadeSummary,
+    isDeleting,
+    setSelectedDoc,
+    handleFileChange,
+    handleDragOver,
+    handleDragLeave,
+    handleDrop,
+    handleCancelUpload,
+    handleSelectDoc,
+    processFile,
+    handleAnalyzeNotes,
+    handleCancelAnalysis,
+    handleOpenExcerpt,
+    handleOpenDelete,
+    handleCloseDelete,
+    confirmDelete,
+  } = useMaterialsManager();
 
   const supportedFormatsText = `Supported formats: PDF (.pdf), Plain Text (.txt), Markdown (.md) up to ${formatBytes(MAX_UPLOAD_BYTES)}.`;
 
@@ -590,7 +137,7 @@ export function MaterialsView() {
                 if (file && selectedDoc) {
                   void processFile(file, { replaceMaterialId: selectedDoc.id, allowDuplicate: true });
                 }
-                if (replaceFileInputRef.current) replaceFileInputRef.current.value = '';
+                e.target.value = '';
               }}
               className="sr-only"
             />
@@ -646,7 +193,6 @@ export function MaterialsView() {
                   </div>
                   <span className="font-mono">{progress.percent}%</span>
                 </div>
-                {/* Progress bar element */}
                 <div
                   role="progressbar"
                   aria-valuenow={progress.percent}
@@ -675,7 +221,7 @@ export function MaterialsView() {
               </div>
             )}
 
-            {/* Specific Error State Notification */}
+            {/* Error State Notification */}
             {uploadError && (
               <div
                 id="upload-error-alert"
@@ -817,7 +363,7 @@ export function MaterialsView() {
               <Button
                 variant="secondary"
                 size="sm"
-                onClick={() => selectedDoc && handleOpenDelete(selectedDoc)}
+                onClick={() => handleOpenDelete(selectedDoc)}
                 className="shrink-0 text-[var(--danger)] hover:bg-[var(--danger)]/10"
               >
                 <Trash2 className="h-4 w-4" />
@@ -827,11 +373,7 @@ export function MaterialsView() {
               <Button
                 variant="ghost"
                 size="sm"
-                onClick={() => {
-                  setSelectedDoc(null);
-                  setSelectedDocChunks([]);
-                  setExtractedConcepts([]);
-                }}
+                onClick={() => setSelectedDoc(null)}
                 aria-label="Close document preview"
                 className="shrink-0"
               >
@@ -920,317 +462,19 @@ export function MaterialsView() {
             </p>
           </div>
 
-          {/* Tabs: Extracted Text vs Chunks vs Concepts */}
-          <div className="border-b border-[var(--border-color)] flex gap-4 text-sm">
-            <button
-              type="button"
-              onClick={() => setPreviewTab('text')}
-              className={cn(
-                'pb-2 font-medium border-b-2 transition-colors cursor-pointer',
-                previewTab === 'text'
-                  ? 'border-[var(--primary)] text-[var(--text-primary)]'
-                  : 'border-transparent text-[var(--text-muted)] hover:text-[var(--text-secondary)]',
-              )}
-            >
-              Extracted Text ({selectedDoc.extractedText.length.toLocaleString()} chars)
-            </button>
-            <button
-              type="button"
-              onClick={() => setPreviewTab('chunks')}
-              className={cn(
-                'pb-2 font-medium border-b-2 transition-colors cursor-pointer',
-                previewTab === 'chunks'
-                  ? 'border-[var(--primary)] text-[var(--text-primary)]'
-                  : 'border-transparent text-[var(--text-muted)] hover:text-[var(--text-secondary)]',
-              )}
-            >
-              Study Chunks ({selectedDocChunks.length})
-            </button>
-            <button
-              type="button"
-              onClick={() => setPreviewTab('concepts')}
-              className={cn(
-                'pb-2 font-medium border-b-2 transition-colors cursor-pointer flex items-center gap-1.5',
-                previewTab === 'concepts'
-                  ? 'border-[var(--primary)] text-[var(--text-primary)]'
-                  : 'border-transparent text-[var(--text-muted)] hover:text-[var(--text-secondary)]',
-              )}
-            >
-              <Network className="h-3.5 w-3.5" />
-              <span>Extracted Concepts ({extractedConcepts.length})</span>
-            </button>
-            <button
-              type="button"
-              onClick={() => setPreviewTab('units')}
-              className={cn(
-                'pb-2 font-medium border-b-2 transition-colors cursor-pointer flex items-center gap-1.5',
-                previewTab === 'units'
-                  ? 'border-[var(--primary)] text-[var(--text-primary)]'
-                  : 'border-transparent text-[var(--text-muted)] hover:text-[var(--text-secondary)]',
-              )}
-            >
-              <Layers className="h-3.5 w-3.5" />
-              <span>Learning Units ({selectedDocUnits.length})</span>
-            </button>
-          </div>
-
-          {/* Tab 1: Full Extracted Text View */}
-          {previewTab === 'text' && (
-            <Card>
-              <CardContent className="p-4 sm:p-6">
-                <div
-                  tabIndex={0}
-                  aria-label="Normalized extracted text preview"
-                  className="max-h-96 overflow-y-auto whitespace-pre-wrap font-sans text-xs sm:text-sm leading-relaxed text-[var(--text-secondary)] bg-[var(--surface)] p-4 rounded-lg border border-[var(--border-color)] focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-[var(--focus-ring)] select-text"
-                >
-                  {selectedDoc.extractedText || 'No text extracted.'}
-                </div>
-              </CardContent>
-            </Card>
-          )}
-
-          {/* Tab 2: Study Chunks View */}
-          {previewTab === 'chunks' && (
-            <div className="space-y-3">
-              {loadingChunks ? (
-                <div className="p-8 text-center text-xs text-[var(--text-muted)]">
-                  Loading chunks...
-                </div>
-              ) : selectedDocChunks.length === 0 ? (
-                <div className="p-8 text-center text-xs text-[var(--text-muted)]">
-                  No chunks generated for this material.
-                </div>
-              ) : (
-                selectedDocChunks.map((chunk) => {
-                  const isValid = verifyChunkProvenance(selectedDoc, chunk);
-                  return (
-                    <Card key={chunk.id} className="text-xs space-y-2">
-                      <CardHeader className="py-2.5 px-4 flex flex-row items-center justify-between border-b border-[var(--border-color)]">
-                        <div className="flex items-center gap-2">
-                          <span className="font-mono font-bold text-[var(--primary)]">
-                            Chunk #{chunk.chunkIndex + 1}
-                          </span>
-                          {chunk.pageStart && (
-                            <span className="px-2 py-0.5 rounded bg-[var(--surface)] text-[10px] text-[var(--text-secondary)]">
-                              Page {chunk.pageStart}
-                              {chunk.pageEnd && chunk.pageEnd !== chunk.pageStart
-                                ? `–${chunk.pageEnd}`
-                                : ''}
-                            </span>
-                          )}
-                          {chunk.headingPath && chunk.headingPath.length > 0 && (
-                            <span className="px-2 py-0.5 rounded bg-[var(--surface)] text-[10px] text-[var(--text-secondary)] truncate max-w-xs">
-                              {chunk.headingPath.join(' › ')}
-                            </span>
-                          )}
-                        </div>
-
-                        <div className="flex items-center gap-2">
-                          <span className="font-mono text-[10px] text-[var(--text-muted)]">
-                            [{chunk.startOffset}..{chunk.endOffset}]
-                          </span>
-                          {isValid ? (
-                            <span
-                              title="Mathematically proven: doc.extractedText.slice(start, end) === chunk.text"
-                              className="flex items-center gap-1 text-[10px] font-medium text-[var(--success)]"
-                            >
-                              <CheckCircle2 className="h-3 w-3" />
-                              <span>Proven</span>
-                            </span>
-                          ) : (
-                            <span className="flex items-center gap-1 text-[10px] font-medium text-[var(--danger)]">
-                              <ShieldAlert className="h-3 w-3" />
-                              <span>Corrupt Offset</span>
-                            </span>
-                          )}
-                        </div>
-                      </CardHeader>
-                      <CardContent className="px-4 py-3">
-                        <p className="font-sans text-xs sm:text-sm text-[var(--text-secondary)] leading-relaxed select-text">
-                          {chunk.text}
-                        </p>
-                      </CardContent>
-                    </Card>
-                  );
-                })
-              )}
-            </div>
-          )}
-
-          {/* Tab 3: Extracted Concepts View */}
-          {previewTab === 'concepts' && (
-            <div className="space-y-4">
-              {extractedConcepts.length === 0 ? (
-                <Card>
-                  <CardContent className="p-8 text-center space-y-3">
-                    <Sparkles className="h-8 w-8 text-[var(--primary)] mx-auto opacity-70" />
-                    <p className="text-sm font-semibold text-[var(--text-primary)]">
-                      No concepts extracted yet
-                    </p>
-                    <p className="text-xs text-[var(--text-muted)] max-w-md mx-auto">
-                      Click the &quot;Analyze notes&quot; button above to extract teachable concepts, key terms,
-                      and prerequisite relationships using Gemini.
-                    </p>
-                    <Button variant="primary" size="sm" onClick={handleAnalyzeNotes} disabled={isAnalyzing}>
-                      Analyze notes now
-                    </Button>
-                  </CardContent>
-                </Card>
-              ) : (
-                <div className="grid grid-cols-1 gap-4">
-                  {extractedConcepts.map((concept) => (
-                    <Card key={concept.id} className="overflow-hidden border border-[var(--border-color)]">
-                      <CardHeader className="py-3 px-4 sm:px-6 bg-[var(--surface-raised)]/40 border-b border-[var(--border-color)] flex flex-col sm:flex-row sm:items-center justify-between gap-2">
-                        <div className="flex items-center gap-2.5">
-                          <h3 className="text-base font-bold text-[var(--text-primary)]">
-                            {concept.title}
-                          </h3>
-                          <span className="text-[10px] font-semibold px-2 py-0.5 rounded-full bg-[var(--surface)] text-[var(--accent-blue)] border border-[var(--border-color)]">
-                            {concept.tier === 0 ? 'Tier 0: Foundational' : concept.tier === 1 ? 'Tier 1: Core' : 'Tier 2: Advanced'}
-                          </span>
-                        </div>
-
-                        <div className="flex items-center gap-2">
-                          <span
-                            className="text-[10px] font-semibold px-2 py-0.5 rounded-full bg-[var(--success)]/15 border border-[var(--success)]/30 text-[var(--success)]"
-                            title="Model extraction confidence"
-                          >
-                            {Math.round(concept.confidence * 100)}% confidence
-                          </span>
-                        </div>
-                      </CardHeader>
-
-                      <CardContent className="p-4 sm:p-6 space-y-4">
-                        <div>
-                          <p className="text-xs font-semibold text-[var(--text-muted)] uppercase tracking-wider mb-1">
-                            Summary
-                          </p>
-                          <p className="text-xs sm:text-sm text-[var(--text-secondary)] leading-relaxed">
-                            {concept.summary}
-                          </p>
-                        </div>
-
-                        {concept.canonicalExplanation && (
-                          <div className="p-3 rounded-lg bg-[var(--surface)] border border-[var(--border-color)]">
-                            <p className="text-xs font-semibold text-[var(--accent-blue)] mb-1">
-                              Canonical Explanation
-                            </p>
-                            <p className="text-xs sm:text-sm text-[var(--text-secondary)] leading-relaxed">
-                              {concept.canonicalExplanation}
-                            </p>
-                          </div>
-                        )}
-
-                        {concept.keyTerms && concept.keyTerms.length > 0 && (
-                          <div className="space-y-1.5">
-                            <p className="text-[11px] font-semibold text-[var(--text-muted)] flex items-center gap-1">
-                              <Tag className="h-3 w-3" />
-                              <span>Key Terms</span>
-                            </p>
-                            <div className="flex flex-wrap gap-1.5">
-                              {concept.keyTerms.map((term, i) => (
-                                <span
-                                  key={i}
-                                  className="text-[11px] px-2 py-0.5 rounded-md bg-[var(--surface-raised)] border border-[var(--border-color)] text-[var(--text-secondary)]"
-                                >
-                                  {term}
-                                </span>
-                              ))}
-                            </div>
-                          </div>
-                        )}
-
-                        {/* Source citations provenance viewer */}
-                        <div className="pt-2 border-t border-[var(--border-color)]/60 flex flex-wrap items-center gap-2 text-xs text-[var(--text-muted)]">
-                          <Quote className="h-3.5 w-3.5 text-[var(--primary)]" />
-                          <span>Grounded in chunks:</span>
-                          {concept.sourceChunkIds.map((cid) => {
-                            const chunk = selectedDocChunks.find((c) => c.id === cid);
-                            const label = chunk ? `Chunk #${chunk.chunkIndex + 1}` : 'Chunk';
-                            return (
-                              <button
-                                key={cid}
-                                type="button"
-                                onClick={() => handleOpenExcerpt(concept, cid)}
-                                className="px-2 py-0.5 rounded bg-[var(--surface)] hover:bg-[var(--surface-hover)] border border-[var(--border-color)] text-[var(--primary)] font-mono text-[10px] cursor-pointer transition-colors"
-                              >
-                                {label}
-                              </button>
-                            );
-                          })}
-                        </div>
-                      </CardContent>
-                    </Card>
-                  ))}
-                </div>
-              )}
-            </div>
-          )}
-
-          {/* Tab 4: Learning Units View */}
-          {previewTab === 'units' && (
-            <div className="space-y-4">
-              {selectedDocUnits.length === 0 ? (
-                <Card>
-                  <CardContent className="p-8 text-center space-y-3">
-                    <Layers className="h-8 w-8 text-[var(--primary)] mx-auto opacity-70" />
-                    <p className="text-sm font-semibold text-[var(--text-primary)]">
-                      No learning units created yet
-                    </p>
-                    <p className="text-xs text-[var(--text-muted)] max-w-md mx-auto">
-                      Analyze your notes to automatically synthesize concepts into structured learning units.
-                    </p>
-                    <Button variant="primary" size="sm" onClick={handleAnalyzeNotes} disabled={isAnalyzing}>
-                      Analyze notes to build units
-                    </Button>
-                  </CardContent>
-                </Card>
-              ) : (
-                <div className="grid grid-cols-1 gap-4">
-                  {selectedDocUnits.map((unit) => {
-                    const unitConcepts = extractedConcepts.filter((c) => unit.conceptIds.includes(c.id));
-                    return (
-                      <Card key={unit.id} className="overflow-hidden border border-[var(--border-color)]">
-                        <CardHeader className="py-3 px-4 sm:px-6 bg-[var(--surface-raised)]/40 border-b border-[var(--border-color)] flex flex-col sm:flex-row sm:items-center justify-between gap-2">
-                          <div className="flex items-center gap-2.5">
-                            <span className="font-mono text-xs font-bold px-2 py-0.5 rounded bg-[var(--primary)]/10 text-[var(--primary)]">
-                              Unit #{unit.order + 1}
-                            </span>
-                            <h3 className="text-base font-bold text-[var(--text-primary)]">
-                              {unit.title}
-                            </h3>
-                          </div>
-                          <span className="text-[10px] font-mono px-2 py-0.5 rounded bg-[var(--surface)] border border-[var(--border-color)] text-[var(--text-muted)]">
-                            v:{unit.contentVersion.slice(0, 8)}
-                          </span>
-                        </CardHeader>
-                        <CardContent className="p-4 sm:p-6 space-y-3">
-                          <p className="text-xs sm:text-sm text-[var(--text-secondary)] leading-relaxed">
-                            {unit.summary}
-                          </p>
-                          <div>
-                            <p className="text-xs font-semibold text-[var(--text-muted)] uppercase tracking-wider mb-1.5">
-                              Concepts in this Unit ({unit.conceptIds.length})
-                            </p>
-                            <div className="flex flex-wrap gap-1.5">
-                              {unitConcepts.map((c) => (
-                                <span
-                                  key={c.id}
-                                  className="text-xs px-2.5 py-1 rounded-md bg-[var(--surface)] border border-[var(--border-color)] text-[var(--text-primary)]"
-                                >
-                                  {c.title}
-                                </span>
-                              ))}
-                            </div>
-                          </div>
-                        </CardContent>
-                      </Card>
-                    );
-                  })}
-                </div>
-              )}
-            </div>
-          )}
+          {/* Tabbed Inspector: Extracted Text, Study Chunks, Concepts, Learning Units */}
+          <MaterialDetailTabs
+            selectedDoc={selectedDoc}
+            selectedDocChunks={selectedDocChunks}
+            extractedConcepts={extractedConcepts}
+            selectedDocUnits={selectedDocUnits}
+            loadingChunks={loadingChunks}
+            previewTab={previewTab}
+            setPreviewTab={setPreviewTab}
+            onAnalyzeNotes={handleAnalyzeNotes}
+            isAnalyzing={isAnalyzing}
+            onOpenExcerpt={handleOpenExcerpt}
+          />
         </section>
       )}
 
@@ -1359,193 +603,43 @@ export function MaterialsView() {
       </section>
 
       {/* Source Excerpt Provenance Inspector Modal */}
-      {inspectedExcerpt && (
-        <Dialog open={!!inspectedExcerpt} onOpenChange={(open) => !open && setInspectedExcerpt(null)}>
-          <DialogContent
-            title={`Source Provenance: ${inspectedExcerpt.conceptTitle}`}
-            description={`Verified context from Chunk #${inspectedExcerpt.chunkIndex}`}
-            className="max-w-2xl"
-          >
-            <div className="space-y-4 pt-2">
-              <div className="flex items-center justify-between text-xs text-[var(--text-muted)] border-b border-[var(--border-color)] pb-2">
-                <span>Concept: <strong className="text-[var(--text-primary)]">{inspectedExcerpt.conceptTitle}</strong></span>
-                <span className="font-mono">Chunk #{inspectedExcerpt.chunkIndex}</span>
-              </div>
+      <MaterialExcerptModal
+        excerptData={inspectedExcerpt}
+        onClose={() => setInspectedExcerpt(null)}
+      />
 
-              <div className="p-4 rounded-lg bg-[var(--surface)] border border-[var(--border-color)] max-h-72 overflow-y-auto text-xs sm:text-sm font-sans leading-relaxed text-[var(--text-secondary)]">
-                <span className="text-[var(--text-muted)]">{inspectedExcerpt.excerpt.before}</span>
-                <mark className="bg-[var(--primary)]/25 text-[var(--text-primary)] px-1 py-0.5 rounded font-medium border border-[var(--primary)]/40">
-                  {inspectedExcerpt.excerpt.matched}
-                </mark>
-                <span className="text-[var(--text-muted)]">{inspectedExcerpt.excerpt.after}</span>
-              </div>
-
-              <div className="flex items-center gap-2 text-[11px] text-[var(--success)]">
-                <CheckCircle2 className="h-4 w-4" />
-                <span>Exact mathematical provenance verified against stored normalized notes.</span>
-              </div>
-            </div>
-
-            <DialogFooter className="mt-4">
-              <Button variant="secondary" onClick={() => setInspectedExcerpt(null)}>
-                Close Excerpt
-              </Button>
-            </DialogFooter>
-          </DialogContent>
-        </Dialog>
-      )}
-
-      {/* Delete Confirmation Dialog */}
-      <Dialog open={!!docToDelete} onOpenChange={(open) => !open && handleCloseDelete()}>
-        <DialogContent
-          title="Delete study material?"
-          description="Are you sure you want to delete this document?"
-        >
-          <div className="space-y-3 pt-2 text-sm text-[var(--text-secondary)]">
-            <p>
-              Are you sure you want to delete{' '}
-              <strong className="text-[var(--text-primary)]">{docToDelete?.filename}</strong>?
-            </p>
-            {deleteCascadeSummary ? (
-              <div className="p-3 rounded-lg bg-[var(--surface)] border border-[var(--border-color)] text-xs space-y-1.5">
-                <p className="font-semibold text-[var(--danger)]">
-                  This will permanently remove the document and its associated study chunks:
-                </p>
-                <ul className="list-disc pl-5 space-y-0.5 text-[var(--text-secondary)]">
-                  <li>{deleteCascadeSummary.chunkCount} study chunks</li>
-                  <li>{deleteCascadeSummary.conceptCount} extracted concepts</li>
-                  <li>{deleteCascadeSummary.unitCount} learning units</li>
-                  <li>{deleteCascadeSummary.questionCount} recall questions</li>
-                  <li>{deleteCascadeSummary.attemptCount} study sessions & recall attempts</li>
-                </ul>
-              </div>
-            ) : (
-              <p className="text-xs text-[var(--text-muted)]">
-                This will permanently remove the document and its associated study chunks from this
-                device&apos;s local storage. This action cannot be undone.
-              </p>
-            )}
-          </div>
-          <DialogFooter className="mt-4">
-            <Button
-              variant="secondary"
-              onClick={handleCloseDelete}
-              disabled={isDeleting}
-            >
-              Cancel
-            </Button>
-            <Button
-              variant="destructive"
-              onClick={confirmDelete}
-              disabled={isDeleting}
-            >
-              {isDeleting ? 'Deleting...' : 'Delete document'}
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+      {/* Delete Confirmation Modal */}
+      <MaterialDeleteModal
+        isOpen={!!docToDelete}
+        doc={docToDelete}
+        summary={deleteCascadeSummary}
+        isDeleting={isDeleting}
+        onConfirm={confirmDelete}
+        onClose={handleCloseDelete}
+      />
 
       {/* Duplicate Notice Modal */}
-      {duplicateModal && (
-        <Dialog open={!!duplicateModal} onOpenChange={(open) => !open && setDuplicateModal(null)}>
-          <DialogContent
-            title={
-              duplicateModal.decision.type === 'EXACT_DUPLICATE'
-                ? 'Document Already in Library'
-                : 'Filename Collision'
-            }
-            description={
-              duplicateModal.decision.type === 'EXACT_DUPLICATE'
-                ? 'An identical document is already stored in your local library.'
-                : 'A document with this filename already exists, but its content is different.'
-            }
-          >
-            <div className="space-y-4 pt-2 text-sm text-[var(--text-secondary)]">
-              {duplicateModal.decision.type === 'EXACT_DUPLICATE' ? (
-                <>
-                  <p>
-                    The file <strong className="text-[var(--text-primary)]">{duplicateModal.file.name}</strong> has identical bytes to{' '}
-                    <strong className="text-[var(--text-primary)]">
-                      {duplicateModal.decision.existingDocument?.filename ?? 'an existing document'}
-                    </strong>{' '}
-                    (SHA-256 match).
-                  </p>
-                  <p className="text-xs text-[var(--text-muted)]">
-                    You can open the existing material or explicitly import it as a separate copy.
-                  </p>
-                </>
-              ) : (
-                <>
-                  <p>
-                    A material named <strong className="text-[var(--text-primary)]">{duplicateModal.file.name}</strong> already exists, but the file you selected has different content.
-                  </p>
-                  <p className="text-xs text-[var(--text-muted)]">
-                    Would you like to import this as a new material, or replace the existing material?
-                  </p>
-                </>
-              )}
-            </div>
-
-            <DialogFooter className="mt-4 flex-col sm:flex-row gap-2">
-              <Button variant="ghost" onClick={() => setDuplicateModal(null)}>
-                Cancel
-              </Button>
-              {duplicateModal.decision.type === 'EXACT_DUPLICATE' ? (
-                <>
-                  <Button
-                    variant="secondary"
-                    onClick={() => {
-                      const f = duplicateModal.file;
-                      setDuplicateModal(null);
-                      void processFile(f, { allowDuplicate: true });
-                    }}
-                  >
-                    Import as Separate Copy
-                  </Button>
-                  {duplicateModal.decision.existingDocument && (
-                    <Button
-                      variant="primary"
-                      onClick={() => {
-                        const doc = duplicateModal.decision.existingDocument!;
-                        setDuplicateModal(null);
-                        void handleSelectDoc(doc);
-                      }}
-                    >
-                      Open Existing
-                    </Button>
-                  )}
-                </>
-              ) : (
-                <>
-                  <Button
-                    variant="secondary"
-                    onClick={() => {
-                      const f = duplicateModal.file;
-                      setDuplicateModal(null);
-                      void processFile(f, { allowDuplicate: true });
-                    }}
-                  >
-                    Import as New
-                  </Button>
-                  {duplicateModal.decision.existingDocument && (
-                    <Button
-                      variant="primary"
-                      onClick={() => {
-                        const f = duplicateModal.file;
-                        const existingId = duplicateModal.decision.existingDocument!.id;
-                        setDuplicateModal(null);
-                        void processFile(f, { replaceMaterialId: existingId, allowDuplicate: true });
-                      }}
-                    >
-                      Replace Existing
-                    </Button>
-                  )}
-                </>
-              )}
-            </DialogFooter>
-          </DialogContent>
-        </Dialog>
-      )}
+      <DuplicateNoticeModal
+        isOpen={!!duplicateModal}
+        decision={duplicateModal?.decision ?? null}
+        file={duplicateModal?.file ?? null}
+        onOpenExisting={(id) => {
+          const doc = documents.find((d) => d.id === id);
+          if (doc) void handleSelectDoc(doc);
+          setDuplicateModal(null);
+        }}
+        onImportSeparate={() => {
+          const file = duplicateModal?.file;
+          setDuplicateModal(null);
+          if (file) void processFile(file, { allowDuplicate: true });
+        }}
+        onReplaceExisting={(id) => {
+          const file = duplicateModal?.file;
+          setDuplicateModal(null);
+          if (file) void processFile(file, { replaceMaterialId: id, allowDuplicate: true });
+        }}
+        onCancel={() => setDuplicateModal(null)}
+      />
     </div>
   );
 }

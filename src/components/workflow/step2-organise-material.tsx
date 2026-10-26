@@ -16,6 +16,7 @@ import {
   Square,
   Circle,
   CheckCircle2,
+  Sparkles,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Card, CardHeader, CardTitle, CardDescription, CardContent } from '@/components/ui/card';
@@ -25,15 +26,153 @@ import {
   type LearningUnitRecord,
   type ConceptRecord,
   type MaterialProcessingRecord,
+  type ProcessingStage,
 } from '@/types/domain';
 import { type WorkflowSelection } from '@/features/workflow/types';
 import { persistWorkflowPreference } from '@/features/workflow/launch-context';
-import { resumeMaterialAnalysis } from '@/features/ingestion/processing-service';
+import { resumeMaterialAnalysis, processingJobManager } from '@/features/ingestion';
 import { cn } from '@/lib/utils/cn';
 
 export interface Step2OrganiseMaterialProps {
   materialId: string;
   className?: string;
+}
+
+export type PipelineStageId = 'INGESTION' | 'ANALYZING' | 'UNITS_BUILT';
+
+export function getProcessingStatusMessage(
+  proc: MaterialProcessingRecord | null,
+  isFailed: boolean,
+  retryError: string | null
+): string {
+  if (proc?.stage === 'CANCELLED') {
+    return 'Analysis paused by user. Your progress has been saved.';
+  }
+
+  if (isFailed) {
+    return proc?.errorMessage ?? retryError ?? 'Analysis halted. Please retry.';
+  }
+
+  // If backend provided a rate-limiting throttle/pacing message, show it directly
+  if (proc?.message && /pacing|respect gemini|waiting \d+s/i.test(proc.message)) {
+    return proc.message;
+  }
+
+  const stage = proc?.stage ?? 'INGESTION';
+  switch (stage) {
+    case 'SELECTED':
+    case 'VALIDATED':
+      return 'Validating study material…';
+    case 'EXTRACTED':
+    case 'PREVIEWED':
+    case 'SAVED':
+      return 'Extracting text and chunking material…';
+    case 'ANALYZING': {
+      const cur = proc?.currentBatch;
+      const total = proc?.totalBatches;
+      if (cur && total && total > 1) {
+        return `Identifying key concepts (batch ${cur} of ${total})…`;
+      }
+      return 'Identifying key concepts…';
+    }
+    case 'UNITS_BUILT':
+      return 'Organising concepts, prerequisites, and learning units…';
+    case 'COMPLETE':
+      return 'Material analysis complete.';
+    default:
+      return 'Extracting text from your material…';
+  }
+}
+
+export function getStageState(
+  stageId: PipelineStageId,
+  currentStage: ProcessingStage,
+  isFailed: boolean,
+  failedStage?: ProcessingStage
+): 'done' | 'active' | 'waiting' | 'failed' {
+  if (isFailed) {
+    const failedAt = failedStage ?? (currentStage === 'CANCELLED' ? 'ANALYZING' : 'ANALYZING');
+    if (stageId === 'INGESTION') {
+      return failedAt === 'VALIDATED' || failedAt === 'EXTRACTED' || failedAt === 'SAVED'
+        ? 'failed'
+        : 'done';
+    }
+    if (stageId === 'ANALYZING') {
+      if (failedAt === 'VALIDATED' || failedAt === 'EXTRACTED' || failedAt === 'SAVED') {
+        return 'waiting';
+      }
+      return failedAt === 'ANALYZING' || failedAt === 'CANCELLED' ? 'failed' : 'done';
+    }
+    if (stageId === 'UNITS_BUILT') {
+      return failedAt === 'UNITS_BUILT' ? 'failed' : 'waiting';
+    }
+  }
+
+  if (currentStage === 'COMPLETE') {
+    return 'done';
+  }
+
+  if (stageId === 'INGESTION') {
+    if (currentStage === 'ANALYZING' || currentStage === 'UNITS_BUILT') {
+      return 'done';
+    }
+    return 'active';
+  }
+
+  if (stageId === 'ANALYZING') {
+    if (currentStage === 'UNITS_BUILT') {
+      return 'done';
+    }
+    if (currentStage === 'ANALYZING') {
+      return 'active';
+    }
+    return 'waiting';
+  }
+
+  if (stageId === 'UNITS_BUILT') {
+    if (currentStage === 'UNITS_BUILT') {
+      return 'active';
+    }
+    return 'waiting';
+  }
+
+  return 'waiting';
+}
+
+export function calculateOverallProgress(
+  stage: ProcessingStage,
+  proc: MaterialProcessingRecord | null,
+  isFailed?: boolean
+): number {
+  if (stage === 'COMPLETE') return 100;
+  if (stage === 'UNITS_BUILT') return 85;
+
+  if (stage === 'ANALYZING' || stage === 'CANCELLED' || (isFailed && stage === 'FAILED')) {
+    const total = proc?.totalBatches ?? 0;
+    if (total <= 0) return 25;
+
+    // Completed batches: count from analyzedBatchIndices or 1-based currentBatch - 1
+    const completed =
+      proc?.analyzedBatchIndices?.length ??
+      Math.max(0, (proc?.currentBatch ?? 1) - 1);
+
+    const fraction = Math.min(1, Math.max(0, completed / total));
+    return Math.round(25 + fraction * 60);
+  }
+
+  // Early ingestion stages (SELECTED, VALIDATED, EXTRACTED, PREVIEWED, SAVED)
+  switch (stage) {
+    case 'SELECTED':
+    case 'VALIDATED':
+      return 5;
+    case 'EXTRACTED':
+      return 12;
+    case 'PREVIEWED':
+    case 'SAVED':
+      return 20;
+    default:
+      return 10;
+  }
 }
 
 export function Step2OrganiseMaterial({ materialId, className }: Step2OrganiseMaterialProps) {
@@ -56,6 +195,11 @@ export function Step2OrganiseMaterial({ materialId, className }: Step2OrganiseMa
   const [selectionKind, setSelectionKind] = React.useState<'WHOLE_MATERIAL' | 'UNITS'>('WHOLE_MATERIAL');
   const [selectedUnitIds, setSelectedUnitIds] = React.useState<Set<string>>(new Set());
 
+  // Reassurance timer for slow requests
+  const [activeElapsedSeconds, setActiveElapsedSeconds] = React.useState(0);
+  const isLoadingDataRef = React.useRef(false);
+  const isRetryingRef = React.useRef(false);
+
   // Move focus to step heading on mount
   React.useEffect(() => {
     headingRef.current?.focus();
@@ -63,6 +207,8 @@ export function Step2OrganiseMaterial({ materialId, className }: Step2OrganiseMa
 
   // Load material, processing status, learning units, and saved workflow preference
   const loadData = React.useCallback(async () => {
+    if (isLoadingDataRef.current) return;
+    isLoadingDataRef.current = true;
     try {
       const repos = getStorage();
       const material = await repos.documents.get(materialId);
@@ -96,10 +242,27 @@ export function Step2OrganiseMaterial({ materialId, className }: Step2OrganiseMa
           setSelectionKind('WHOLE_MATERIAL');
           setSelectedUnitIds(new Set(loadedUnits.map((u) => u.id)));
         }
+      } else if (
+        proc &&
+        proc.stage !== 'FAILED' &&
+        proc.stage !== 'CANCELLED' &&
+        !processingJobManager.hasJob(materialId)
+      ) {
+        // Auto-resume orphaned job from saved checkpoint
+        void resumeMaterialAnalysis(materialId, {
+          customRepos: repos,
+          onProgress: (r) => setProcessing(r),
+        }).then((res) => {
+          if (!res.success) {
+            setRetryError(res.error ?? 'Resume failed.');
+            setProcessing(res.record);
+          }
+        });
       }
     } catch (err) {
       console.error('Failed to load material data:', err);
     } finally {
+      isLoadingDataRef.current = false;
       setLoading(false);
     }
   }, [materialId]);
@@ -116,12 +279,33 @@ export function Step2OrganiseMaterial({ materialId, className }: Step2OrganiseMa
     };
   }, [loadData]);
 
-  // Polling while processing is in active state (e.g. ANALYZING)
+  // Subscribe to live background processing events from processingJobManager
   React.useEffect(() => {
-    if (processing?.stage !== 'COMPLETE' && processing?.stage !== 'FAILED') {
+    let mounted = true;
+    const unsub = processingJobManager.subscribe(materialId, (rec) => {
+      if (!mounted) return;
+      setProcessing(rec);
+      if (rec.stage === 'COMPLETE') {
+        void loadData();
+      }
+    });
+
+    return () => {
+      mounted = false;
+      unsub();
+    };
+  }, [materialId, loadData]);
+
+  // Polling fallback while processing is in active state (e.g. ANALYZING)
+  React.useEffect(() => {
+    if (
+      processing?.stage !== 'COMPLETE' &&
+      processing?.stage !== 'FAILED' &&
+      processing?.stage !== 'CANCELLED'
+    ) {
       const interval = setInterval(() => {
         loadData();
-      }, 1000);
+      }, 1500);
       return () => clearInterval(interval);
     }
   }, [processing?.stage, loadData]);
@@ -168,8 +352,24 @@ export function Step2OrganiseMaterial({ materialId, className }: Step2OrganiseMa
     await persistWorkflowPreference(materialId, sel, undefined, undefined, repos);
   };
 
-  // Retry or Resume Processing
+  // Cancel processing in-flight
+  const handleCancelProcessing = () => {
+    processingJobManager.cancelJob(materialId);
+    setProcessing((prev) =>
+      prev
+        ? {
+            ...prev,
+            stage: 'CANCELLED',
+            message: 'Analysis paused by user. Your progress has been saved.',
+          }
+        : null
+    );
+  };
+
+  // Retry or Resume Processing with duplicate protection
   const handleRetryProcessing = async () => {
+    if (isRetryingRef.current || isRetrying) return;
+    isRetryingRef.current = true;
     setIsRetrying(true);
     setRetryError(null);
     setProcessing((prev) =>
@@ -177,7 +377,7 @@ export function Step2OrganiseMaterial({ materialId, className }: Step2OrganiseMa
         ? {
             ...prev,
             stage: 'ANALYZING',
-            message: 'Resuming AI concept extraction...',
+            message: 'Resuming AI concept extraction…',
             errorMessage: undefined,
           }
         : null
@@ -200,6 +400,7 @@ export function Step2OrganiseMaterial({ materialId, className }: Step2OrganiseMa
       setRetryError(`Analysis error: ${msg}`);
     } finally {
       setIsRetrying(false);
+      isRetryingRef.current = false;
     }
   };
 
@@ -209,9 +410,21 @@ export function Step2OrganiseMaterial({ materialId, className }: Step2OrganiseMa
   };
 
   const isComplete = processing?.stage === 'COMPLETE' || doc?.analysisStatus === 'completed';
-  const isFailed = processing?.stage === 'FAILED' && !isRetrying;
+  const isCancelled = processing?.stage === 'CANCELLED';
+  const isFailed = (processing?.stage === 'FAILED' || isCancelled) && !isRetrying;
   const hasValidSelection =
     selectionKind === 'WHOLE_MATERIAL' || (selectionKind === 'UNITS' && selectedUnitIds.size > 0);
+
+  // Track elapsed seconds while analyzing to provide calm feedback for slow requests
+  React.useEffect(() => {
+    if (isComplete || isFailed) {
+      return;
+    }
+    const timer = setInterval(() => {
+      setActiveElapsedSeconds((s) => s + 1);
+    }, 1000);
+    return () => clearInterval(timer);
+  }, [isComplete, isFailed, processing?.stage, processing?.currentBatch]);
 
   // Concept lookup map for fast details in unit inspection
   const conceptMap = React.useMemo(() => {
@@ -221,6 +434,12 @@ export function Step2OrganiseMaterial({ materialId, className }: Step2OrganiseMa
     }
     return map;
   }, [concepts]);
+
+  // Derived progress and status helpers
+  const currentStage = processing?.stage ?? 'ANALYZING';
+  const statusMessage = getProcessingStatusMessage(processing, isFailed, retryError);
+  const overallProgress = calculateOverallProgress(currentStage, processing, isFailed);
+  const hasBatches = Boolean(processing?.totalBatches && processing.totalBatches > 0);
 
   return (
     <div className={cn('space-y-6 max-w-4xl mx-auto py-4 sm:py-6 pb-24 sm:pb-32', className)}>
@@ -259,7 +478,7 @@ export function Step2OrganiseMaterial({ materialId, className }: Step2OrganiseMa
 
       {loading ? (
         <div className="py-12 flex flex-col items-center justify-center gap-3" role="status" aria-live="polite">
-          <Loader2 className="h-8 w-8 animate-spin text-[var(--primary)]" aria-label="Loading material units" />
+          <Loader2 className="h-8 w-8 animate-spin text-[var(--primary)] motion-reduce:animate-none" aria-label="Loading material units" />
           <span className="text-sm text-[var(--text-secondary)]">Loading material structure...</span>
         </div>
       ) : !isComplete ? (
@@ -268,17 +487,14 @@ export function Step2OrganiseMaterial({ materialId, className }: Step2OrganiseMa
           <CardHeader>
             <CardTitle className="text-lg flex items-center gap-2 text-[var(--text-primary)]">
               {isFailed ? (
-                <AlertCircle className="h-5 w-5 text-[var(--danger)]" aria-hidden="true" />
+                <AlertCircle className="h-5 w-5 text-[var(--danger)] shrink-0" aria-hidden="true" />
               ) : (
-                <Loader2 className="h-5 w-5 animate-spin text-[var(--primary)]" aria-hidden="true" />
+                <Sparkles className="h-5 w-5 text-[var(--primary)] shrink-0" aria-hidden="true" />
               )}
               <span>{isFailed ? 'Processing Incomplete' : 'Analyzing Study Material'}</span>
             </CardTitle>
-            <CardDescription className="text-sm text-[var(--text-secondary)] flex items-center gap-2">
-              {!isFailed && (
-                <Loader2 className="h-3.5 w-3.5 animate-spin text-[var(--primary)] shrink-0" aria-hidden="true" />
-              )}
-              <span>{processing?.message ?? 'Extracting key concepts, dependencies, and learning units.'}</span>
+            <CardDescription className="text-sm text-[var(--text-secondary)]">
+              {statusMessage}
             </CardDescription>
           </CardHeader>
 
@@ -289,30 +505,16 @@ export function Step2OrganiseMaterial({ materialId, className }: Step2OrganiseMa
                 Processing Pipeline Stages
               </div>
               {[
-                { id: 'INGESTION', label: 'Document Extraction & Chunking' },
-                { id: 'ANALYZING', label: 'AI Concept Extraction' },
-                { id: 'UNITS_BUILT', label: 'Dependency Graph & Learning Units' },
+                { id: 'INGESTION' as const, label: 'Document Extraction & Chunking' },
+                { id: 'ANALYZING' as const, label: 'AI Concept Extraction' },
+                { id: 'UNITS_BUILT' as const, label: 'Dependency Graph & Learning Units' },
               ].map((stageItem) => {
-                const currentStage = processing?.stage ?? 'ANALYZING';
-                let state: 'done' | 'active' | 'waiting' | 'failed' = 'waiting';
-
-                if (isFailed) {
-                  if (stageItem.id === 'ANALYZING') state = 'failed';
-                  else if (stageItem.id === 'INGESTION') state = 'done';
-                  else state = 'waiting';
-                } else if (currentStage === 'COMPLETE') {
-                  state = 'done';
-                } else if (currentStage === 'UNITS_BUILT') {
-                  if (stageItem.id === 'INGESTION' || stageItem.id === 'ANALYZING') state = 'done';
-                  else state = 'active';
-                } else if (currentStage === 'ANALYZING') {
-                  if (stageItem.id === 'INGESTION') state = 'done';
-                  else if (stageItem.id === 'ANALYZING') state = 'active';
-                  else state = 'waiting';
-                } else {
-                  if (stageItem.id === 'INGESTION') state = 'active';
-                  else state = 'waiting';
-                }
+                const state = getStageState(
+                  stageItem.id,
+                  currentStage,
+                  isFailed,
+                  processing?.failedStage
+                );
 
                 return (
                   <div
@@ -327,7 +529,7 @@ export function Step2OrganiseMaterial({ materialId, className }: Step2OrganiseMa
                         <CheckCircle2 className="h-4 w-4 text-[var(--accent-green)] shrink-0" aria-hidden="true" />
                       )}
                       {state === 'active' && (
-                        <Loader2 className="h-4 w-4 animate-spin text-[var(--primary)] shrink-0" aria-hidden="true" />
+                        <Loader2 className="h-4 w-4 animate-spin text-[var(--primary)] motion-reduce:animate-none shrink-0" aria-hidden="true" />
                       )}
                       {state === 'failed' && (
                         <AlertCircle className="h-4 w-4 text-[var(--danger)] shrink-0" aria-hidden="true" />
@@ -345,85 +547,121 @@ export function Step2OrganiseMaterial({ materialId, className }: Step2OrganiseMa
                     </div>
                     <span
                       className={cn(
-                        'capitalize text-[11px] font-mono px-2 py-0.5 rounded flex items-center gap-1.5',
+                        'capitalize text-[11px] font-mono px-2 py-0.5 rounded',
                         state === 'done' && 'text-[var(--accent-green)] bg-[var(--accent-green)]/10',
                         state === 'active' && 'text-[var(--accent-cyan)] bg-[var(--accent-cyan)]/10',
                         state === 'failed' && 'text-[var(--danger)] bg-[var(--danger)]/10',
                         state === 'waiting' && 'text-[var(--text-muted)]'
                       )}
                     >
-                      {state === 'active' && (
-                        <Loader2 className="h-3 w-3 animate-spin text-[var(--accent-cyan)] shrink-0" aria-hidden="true" />
-                      )}
-                      <span>{state}</span>
+                      {state === 'active' ? 'In progress' : state}
                     </span>
                   </div>
                 );
               })}
             </div>
 
-            {/* Real Determinate Progress ONLY for real counts */}
-            {processing?.currentBatch && processing?.totalBatches ? (
-              <div className="space-y-2 pt-1">
-                <div className="flex justify-between text-xs text-[var(--text-muted)] font-medium">
-                  <span className="flex items-center gap-1.5">
-                    {!isFailed && <Loader2 className="h-3 w-3 animate-spin text-[var(--primary)] shrink-0" aria-hidden="true" />}
-                    <span>
-                      Batch {processing.currentBatch} of {processing.totalBatches}
-                    </span>
-                  </span>
-                  <span className="font-mono">{Math.round((processing.currentBatch / processing.totalBatches) * 100)}%</span>
-                </div>
-                <div
-                  role="progressbar"
-                  aria-label={`Analysis progress: batch ${processing.currentBatch} of ${processing.totalBatches}`}
-                  aria-valuenow={processing.currentBatch}
-                  aria-valuemin={0}
-                  aria-valuemax={processing.totalBatches}
-                  className="h-2 w-full rounded-full bg-[var(--surface-raised)] overflow-hidden relative"
-                >
-                  <div
-                    className="h-full bg-[var(--primary)] transition-all duration-300 relative overflow-hidden"
-                    style={{
-                      width: `${Math.min(100, Math.round((processing.currentBatch / processing.totalBatches) * 100))}%`,
-                    }}
-                  >
-                    {!isFailed && (
-                      <span className="absolute inset-0 bg-white/20 animate-pulse" />
-                    )}
-                  </div>
-                </div>
+            {/* Real Determinate Progress derived from completed stages and batches */}
+            <div className="space-y-2 pt-1">
+              <div className="flex justify-between items-center text-xs text-[var(--text-muted)] font-medium">
+                <span>
+                  {hasBatches
+                    ? `Batch ${processing!.currentBatch} of ${processing!.totalBatches}`
+                    : 'Pipeline progress'}
+                </span>
+                <span className="font-mono text-[var(--text-secondary)]">
+                  {overallProgress}%
+                </span>
               </div>
-            ) : null}
+              <div
+                role="progressbar"
+                aria-label={
+                  hasBatches
+                    ? `Analysis progress: batch ${processing!.currentBatch} of ${processing!.totalBatches} (${overallProgress}%)`
+                    : `Analysis progress (${overallProgress}%)`
+                }
+                aria-valuenow={overallProgress}
+                aria-valuemin={0}
+                aria-valuemax={100}
+                className="h-2 w-full rounded-full bg-[var(--surface-raised)] overflow-hidden relative"
+              >
+                <div
+                  className={cn(
+                    'h-full transition-[width] duration-500 ease-out motion-reduce:transition-none',
+                    isFailed ? 'bg-[var(--danger)]' : 'bg-[var(--primary)]'
+                  )}
+                  style={{
+                    width: `${Math.max(0, Math.min(100, overallProgress))}%`,
+                  }}
+                />
+              </div>
 
-            {/* Error & Retry */}
+              {/* Non-alarming reassurance for slow requests */}
+              {activeElapsedSeconds >= 12 && !isFailed && (
+                <p className="text-xs text-[var(--text-muted)] pt-0.5">
+                  Analyzing complex concepts can take a few moments. Still working on it…
+                </p>
+              )}
+
+              {/* In-flight cancellation button */}
+              {!isFailed && !isComplete && (
+                <div className="flex items-center justify-end pt-1">
+                  <Button
+                    type="button"
+                    variant="secondary"
+                    size="sm"
+                    onClick={handleCancelProcessing}
+                    className="text-xs h-7 text-[var(--text-secondary)] hover:text-[var(--danger)] hover:border-[var(--danger)]/30"
+                  >
+                    Cancel Analysis
+                  </Button>
+                </div>
+              )}
+            </div>
+
+            {/* Error, Pause & Retry */}
             {isFailed && (
               <div
                 role="alert"
                 aria-live="assertive"
-                className="rounded-lg border border-[var(--danger)]/30 bg-[var(--danger)]/10 p-4 space-y-3"
+                className={cn(
+                  'rounded-lg border p-4 space-y-3',
+                  isCancelled
+                    ? 'border-[var(--border-color)] bg-[var(--surface-raised)]'
+                    : 'border-[var(--danger)]/30 bg-[var(--danger)]/10'
+                )}
               >
-                <div className="text-sm text-[var(--danger)]">
-                  <p className="font-semibold">Analysis halted:</p>
-                  <p className="text-xs mt-1">{processing?.errorMessage ?? retryError ?? 'An unexpected error occurred during concept extraction.'}</p>
+                <div className={cn('text-sm', isCancelled ? 'text-[var(--text-primary)]' : 'text-[var(--danger)]')}>
+                  <p className="font-semibold">{isCancelled ? 'Analysis paused:' : 'Analysis halted:'}</p>
+                  <p className="text-xs mt-1">
+                    {isCancelled
+                      ? 'Analysis was stopped. Any completed batches are saved and can be resumed.'
+                      : (processing?.errorMessage ?? retryError ?? 'An unexpected error occurred during concept extraction.')}
+                  </p>
                 </div>
                 <div className="flex items-center gap-2">
                   <Button
+                    type="button"
                     variant="primary"
                     size="sm"
                     onClick={handleRetryProcessing}
                     disabled={isRetrying}
-                    className="bg-[var(--danger)] text-white hover:bg-[var(--danger)]/90 min-h-[44px] px-4"
+                    className={cn(
+                      'text-white min-h-[44px] px-4',
+                      isCancelled
+                        ? 'bg-[var(--primary)] hover:bg-[var(--primary-hover)]'
+                        : 'bg-[var(--danger)] hover:bg-[var(--danger)]/90'
+                    )}
                   >
                     {isRetrying ? (
                       <>
-                        <Loader2 className="h-4 w-4 animate-spin mr-1.5" aria-hidden="true" />
-                        <span>Retrying...</span>
+                        <Loader2 className="h-4 w-4 animate-spin motion-reduce:animate-none mr-1.5" aria-hidden="true" />
+                        <span>{isCancelled ? 'Resuming…' : 'Retrying…'}</span>
                       </>
                     ) : (
                       <>
                         <RefreshCw className="h-4 w-4 mr-1.5" aria-hidden="true" />
-                        <span>Resume / Retry Analysis</span>
+                        <span>{isCancelled ? 'Resume Analysis' : 'Resume / Retry Analysis'}</span>
                       </>
                     )}
                   </Button>
