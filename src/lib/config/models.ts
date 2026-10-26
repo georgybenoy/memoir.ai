@@ -9,6 +9,7 @@
 export const ALLOWED_MODELS = [
   'gemini-3.8-flash',
   'gemini-3.8-pro',
+  'gemini-3.5-flash',
   'gemini-2.5-flash',
   'gemini-2.0-flash',
   'gemini-2.0-flash-lite',
@@ -59,6 +60,12 @@ export const MODEL_REGISTRY: Record<AllowedModelId, ModelInfo> = {
     displayName: 'Gemini 3.8 Pro',
     maxOutputTokens: 8192,
     recommendedFor: 'deep',
+  },
+  'gemini-3.5-flash': {
+    id: 'gemini-3.5-flash',
+    displayName: 'Gemini 3.5 Flash',
+    maxOutputTokens: 8192,
+    recommendedFor: 'balanced',
   },
   'gemini-2.5-flash': {
     id: 'gemini-2.5-flash',
