@@ -9,12 +9,22 @@ import path from 'path';
  * - 'unsafe-inline' on script-src & style-src: Required for Next.js hydration scripts and inline CSS variables.
  * - 'wasm-unsafe-eval' on script-src: Strictly required by WebAssembly runtime in @huggingface/transformers / ONNX runtime.
  * - worker-src 'self' blob:: Required for PDF.js worker and Transformers.js embedding worker.
+ * - 'unsafe-eval' on script-src in development mode: strictly required by React 19 / Next.js DevTools for error callstack reconstruction.
  * - connect-src: Allows downloading quantized ONNX model files from Hugging Face CDN.
  * - frame-ancestors 'none': Strict clickjacking protection.
  */
+const isDev = process.env.NODE_ENV !== 'production';
+
+const scriptSrcDirectives = [
+  "'self'",
+  "'unsafe-inline'",
+  "'wasm-unsafe-eval'",
+  ...(isDev ? ["'unsafe-eval'"] : []),
+].join(' ');
+
 const cspDirectives = [
   "default-src 'self'",
-  "script-src 'self' 'unsafe-inline' 'wasm-unsafe-eval'",
+  `script-src ${scriptSrcDirectives}`,
   "style-src 'self' 'unsafe-inline'",
   "img-src 'self' data: blob:",
   "font-src 'self' data:",
